@@ -3,3 +3,5 @@ dist/
 .DS_Store
 .vercel
 backend/.env
+.env
+.env.local

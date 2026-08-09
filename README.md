@@ -26,3 +26,9 @@ npm run dev
 관리자·직원 관점의 상세 업무 흐름과 향후 역할 권한 분리 계획은 [03-user-scenarios.md](docs/03-user-scenarios.md)에서 확인할 수 있습니다.
 
 배포 화면에서 수행한 역할별 브라우저 테스트와 개선 우선순위는 [04-scenario-test-feedback.md](docs/04-scenario-test-feedback.md)에 정리되어 있습니다.
+
+최신 배포 UI를 기준으로 정리한 역할별 2차 사용 흐름과 수용 기준은 [05-user-scenarios-v2.md](docs/05-user-scenarios-v2.md)에서 확인할 수 있습니다.
+
+2차 시나리오에 대한 배포 화면 브라우저 테스트 결과는 [06-scenario-v2-test-report.md](docs/06-scenario-v2-test-report.md)에 정리되어 있습니다.
+
+Supabase 스키마, RLS, QR 출퇴근 Edge Function 및 적용 절차는 [07-supabase-qr-architecture.md](docs/07-supabase-qr-architecture.md)에서 확인할 수 있습니다.
