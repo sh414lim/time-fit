@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: timefit-postgres
+    environment:
+      POSTGRES_USER: timefit
+      POSTGRES_PASSWORD: timefit
+      POSTGRES_DB: timefit
+    ports:
+      - "5432:5432"
+    volumes:
+      - timefit-postgres:/var/lib/postgresql/data
+
+volumes:
+  timefit-postgres:

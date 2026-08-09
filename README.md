@@ -17,4 +17,8 @@ npm run dev
 - `src/main.jsx`: 대시보드와 화면 전환을 포함한 UI 시작점
 - `src/styles.css`: 반응형 관리자 UI 스타일
 
-현재는 목업 데이터 기반의 프론트엔드 골격입니다. 다음 단계에서 인증, API, 데이터베이스 및 급여 계산 엔진을 연결합니다.
+현재 프론트엔드는 브라우저 상태 기반의 MVP이며, API와 PostgreSQL 스키마는 `backend/`에 분리했습니다.
+
+## 백엔드·데이터베이스
+
+기능 목록과 1차 데이터 모델 검증은 [02-feature-validation.md](docs/02-feature-validation.md)에서 확인할 수 있습니다. Prisma/PostgreSQL 스키마와 Express API 골격은 [backend/README.md](backend/README.md)에 안내되어 있습니다.
