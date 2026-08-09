@@ -22,3 +22,7 @@ npm run dev
 ## 백엔드·데이터베이스
 
 기능 목록과 1차 데이터 모델 검증은 [02-feature-validation.md](docs/02-feature-validation.md)에서 확인할 수 있습니다. Prisma/PostgreSQL 스키마와 Express API 골격은 [backend/README.md](backend/README.md)에 안내되어 있습니다.
+
+관리자·직원 관점의 상세 업무 흐름과 향후 역할 권한 분리 계획은 [03-user-scenarios.md](docs/03-user-scenarios.md)에서 확인할 수 있습니다.
+
+배포 화면에서 수행한 역할별 브라우저 테스트와 개선 우선순위는 [04-scenario-test-feedback.md](docs/04-scenario-test-feedback.md)에 정리되어 있습니다.
