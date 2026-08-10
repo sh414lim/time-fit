@@ -20,5 +20,5 @@ Deno.serve(async (request) => {
     if (invitationError) throw invitationError
     const invitationOrganization = invitation ? (await admin.from('timefit_user_organizations').select('name').eq('id', invitation.organization_id).maybeSingle()).data : null
     return new Response(JSON.stringify({ profile, membership: membership ? { ...membership, timefit_user_organizations: organization } : null, invitation: invitation ? { ...invitation, timefit_user_organizations: invitationOrganization } : null }), { headers })
-  } catch (error) { return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'context_failed' }), { status: 400, headers }) }
+  } catch (error) { return new Response(JSON.stringify({ error: error instanceof Error ? error.message : (error as { message?: string }).message || JSON.stringify(error) }), { status: 400, headers }) }
 })

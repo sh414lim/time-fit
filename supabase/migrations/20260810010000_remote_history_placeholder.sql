@@ -1,0 +1,1 @@
+-- Remote migration history placeholder; preserves ordering without changing data.
