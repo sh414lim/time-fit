@@ -16,12 +16,9 @@ export async function getAuthContext() {
   if (!supabase) return { session: null, profile: null, membership: null, invitation: null };
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return { session: null, profile: null, membership: null, invitation: null };
-  const [profileResult, memberResult, inviteResult] = await Promise.all([
-    supabase.from('timefit_user_accounts').select('id, display_name, employee_code, role').eq('id', session.user.id).maybeSingle(),
-    supabase.from('timefit_user_memberships').select('organization_id, role, timefit_user_organizations(id, name)').eq('user_id', session.user.id).limit(1).maybeSingle(),
-    supabase.from('timefit_user_invitations').select('id, organization_id, status, timefit_user_organizations(name)').eq('target_user_id', session.user.id).eq('status', 'pending').limit(1).maybeSingle(),
-  ]);
-  return { session, profile: profileResult.data, membership: memberResult.data, invitation: inviteResult.data };
+  const { data, error } = await supabase.functions.invoke('get-user-context');
+  if (error) throw error;
+  return { session, profile: data.profile, membership: data.membership, invitation: data.invitation };
 }
 
 export async function signUp({ email, password, displayName, accountType, organizationName }) {
@@ -48,8 +45,6 @@ export async function signOut() {
 
 export async function ensureManagerOrganization(session) {
   if (!supabase || session.user.user_metadata?.role !== 'manager') return null;
-  const { data: current } = await supabase.from('timefit_user_memberships').select('organization_id, timefit_user_organizations(id, name)').eq('user_id', session.user.id).limit(1).maybeSingle();
-  if (current) return current;
   const name = session.user.user_metadata?.organization_name?.trim();
   if (!name) return null;
   const { data: organizationId, error } = await supabase.rpc('timefit_user_bootstrap_organization', { p_name: name });
