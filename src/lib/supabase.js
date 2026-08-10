@@ -16,7 +16,7 @@ export async function getAuthContext() {
   if (!supabase) return { session: null, profile: null, membership: null, invitation: null };
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return { session: null, profile: null, membership: null, invitation: null };
-  const { data, error } = await supabase.functions.invoke('get-user-context');
+  const { data, error } = await supabase.functions.invoke('get-user-context', { headers: { Authorization: `Bearer ${session.access_token}` } });
   if (error) throw error;
   return { session, profile: data.profile, membership: data.membership, invitation: data.invitation };
 }
