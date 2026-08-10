@@ -8,7 +8,10 @@ export const supabase = url && anonKey ? createClient(url, anonKey) : null;
 export async function recordQrAttendance(payload) {
   if (!supabase) throw new Error('Supabase 환경 변수가 설정되지 않았습니다.');
   const { data, error } = await supabase.functions.invoke('qr-attendance', { body: payload });
-  if (error) throw error;
+  if (error) {
+    const detail = await error.context?.json?.().catch(() => null);
+    throw new Error(detail?.error || error.message);
+  }
   return data;
 }
 
@@ -17,7 +20,10 @@ export async function getAuthContext() {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return { session: null, profile: null, membership: null, invitation: null };
   const { data, error } = await supabase.functions.invoke('get-user-context', { headers: { Authorization: `Bearer ${session.access_token}` } });
-  if (error) throw error;
+  if (error) {
+    const detail = await error.context?.json?.().catch(() => null);
+    throw new Error(detail?.error || error.message);
+  }
   return { session, profile: data.profile, membership: data.membership, invitation: data.invitation };
 }
 
