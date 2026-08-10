@@ -32,3 +32,5 @@ npm run dev
 2차 시나리오에 대한 배포 화면 브라우저 테스트 결과는 [06-scenario-v2-test-report.md](docs/06-scenario-v2-test-report.md)에 정리되어 있습니다.
 
 Supabase 스키마, RLS, QR 출퇴근 Edge Function 및 적용 절차는 [07-supabase-qr-architecture.md](docs/07-supabase-qr-architecture.md)에서 확인할 수 있습니다.
+
+운영용 백엔드·DB 확정 스펙과 기존 Prisma 초안의 전환 상태는 [08-supabase-backend-spec.md](docs/08-supabase-backend-spec.md)에 정리되어 있습니다.

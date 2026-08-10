@@ -1,6 +1,8 @@
-# TimeFit API
+# TimeFit API (레거시 초안)
 
-PostgreSQL + Prisma 기반의 TimeFit 백엔드 골격입니다.
+> 운영 백엔드 및 데이터베이스는 Supabase로 전환되었습니다. 최신 확정 스펙은 [`docs/08-supabase-backend-spec.md`](../docs/08-supabase-backend-spec.md)를 참고하세요.
+
+이 폴더는 초기 Express + Prisma 설계 참고용입니다. 새 기능은 `supabase/`의 마이그레이션과 Edge Function으로 구현합니다.
 
 ## 시작하기
 
