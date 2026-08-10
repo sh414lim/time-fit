@@ -1,0 +1,2 @@
+-- This migration version already existed in the linked remote project's history.
+-- Kept as a no-op placeholder to preserve migration ordering without altering remote data.
