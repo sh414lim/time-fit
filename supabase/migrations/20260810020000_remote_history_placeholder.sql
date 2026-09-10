@@ -1,0 +1,1 @@
+-- Remote migration history placeholder. The schema change was applied before this repository snapshot.

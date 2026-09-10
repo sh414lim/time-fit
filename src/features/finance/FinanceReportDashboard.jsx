@@ -1,0 +1,50 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import { changeFinanceCloseout, createFinanceCloseout, getAuthContext, loadFinanceCloseouts, loadFinanceReport } from '../../lib/supabase';
+import { downloadFinanceReportCsv, openFinanceReportPrint } from './financeReportExport';
+
+const won = value => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW', maximumFractionDigits: 0 }).format(Math.round(Number(value) || 0));
+const keyToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date());
+const dateKey = date => date.toISOString().slice(0, 10);
+const rate = value => value === null || value === undefined ? '비교 기준 없음' : `${value > 0 ? '+' : ''}${value}%`;
+
+function rangeFor(type, anchor) {
+  const date = new Date(`${anchor}T12:00:00Z`);
+  if (type === 'daily') return { from: anchor, to: anchor };
+  if (type === 'weekly') { const start = new Date(date); start.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7)); const end = new Date(start); end.setUTCDate(start.getUTCDate() + 6); return { from: dateKey(start), to: dateKey(end) }; }
+  if (type === 'annual') return { from: `${anchor.slice(0, 4)}-01-01`, to: `${anchor.slice(0, 4)}-12-31` };
+  const last = new Date(Date.UTC(Number(anchor.slice(0, 4)), Number(anchor.slice(5, 7)), 0));
+  return { from: `${anchor.slice(0, 7)}-01`, to: dateKey(last) };
+}
+
+function ProfitChart({ series = [] }) {
+  const compact = series.length > 62 ? series.filter((_, index) => index % Math.ceil(series.length / 31) === 0) : series;
+  const max = Math.max(1, ...compact.map(item => Math.abs(item.operatingProfit)));
+  const points = compact.map((item, index) => `${compact.length === 1 ? 500 : index * (1000 / (compact.length - 1))},${110 - item.operatingProfit / max * 90}`).join(' ');
+  return <div className="profit-chart"><div className="profit-chart-axis"><span>+{won(max)}</span><span>0</span><span>-{won(max)}</span></div><svg viewBox="0 0 1000 220" preserveAspectRatio="none" role="img" aria-label="기간별 운영순익 변화"><line x1="0" y1="110" x2="1000" y2="110"/><polyline points={points}/>{compact.map((item, index) => <circle key={item.date} cx={compact.length === 1 ? 500 : index * (1000 / (compact.length - 1))} cy={110 - item.operatingProfit / max * 90} r="5"><title>{item.date} {won(item.operatingProfit)}</title></circle>)}</svg><div className="profit-chart-labels"><span>{compact[0]?.date || '-'}</span><span>{compact.at(-1)?.date || '-'}</span></div></div>;
+}
+
+export default function FinanceReportDashboard({ organizationId }) {
+  const [periodType, setPeriodType] = useState('monthly'); const [anchor, setAnchor] = useState(keyToday());
+  const [report, setReport] = useState(null); const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [message, setMessage] = useState('');
+  const [isOwner, setIsOwner] = useState(false);
+  const [closeouts, setCloseouts] = useState([]);
+  const range = useMemo(() => rangeFor(periodType, anchor), [periodType, anchor]);
+  const refresh = async () => { if (!organizationId) return; setLoading(true); setMessage(''); try { setReport(await loadFinanceReport({ organizationId, periodType, ...range })); } catch (error) { setMessage(error.message || '결산 데이터를 불러오지 못했습니다.'); } finally { setLoading(false); } };
+  useEffect(() => { refresh(); }, [organizationId, periodType, range.from, range.to]);
+  useEffect(() => { getAuthContext().then(context => setIsOwner(Boolean(context.isOrganizationOwner))).catch(() => setIsOwner(false)); }, [organizationId]);
+  const refreshCloseouts = async () => { if (!organizationId) return; try { setCloseouts(await loadFinanceCloseouts(organizationId)); } catch (error) { setMessage(error.message || '결산 이력을 불러오지 못했습니다.'); } };
+  useEffect(() => { refreshCloseouts(); }, [organizationId]);
+  const save = async () => { setSaving(true); setMessage(''); try { const result = await createFinanceCloseout({ organizationId, periodType, ...range }); setMessage(`${result.closeout.status === 'ready' ? '결산 준비' : '결산 초안'} 버전 ${result.closeout.version}을 저장했어요.`); await refreshCloseouts(); } catch (error) { setMessage(error.message || '결산 스냅샷을 저장하지 못했습니다.'); } finally { setSaving(false); } };
+  const changeStatus = async (closeout, action) => { const reason = action === 'reopen' ? window.prompt('재오픈 사유를 5자 이상 입력해 주세요.') : ''; if (action === 'reopen' && reason === null) return; if (action === 'close' && !window.confirm(`${closeout.period_start} ~ ${closeout.period_end} 결산을 확정할까요?`)) return; setSaving(true); setMessage(''); try { await changeFinanceCloseout({ organizationId, closeoutId: closeout.id, action, reason }); setMessage(action === 'close' ? '결산을 확정했어요.' : '사유를 기록하고 결산을 재오픈했어요.'); await refreshCloseouts(); } catch (error) { setMessage(error.message || '결산 상태를 변경하지 못했습니다.'); } finally { setSaving(false); } };
+  const totals = report?.totals || {};
+  return <section className="card full-card finance-report-dashboard">
+    <div className="card-title"><div><h2>운영손익·결산</h2><p>매출에서 확정 지출과 급여 초안 기준 인건비를 차감합니다.</p></div><div className="finance-report-actions"><button className="outline" disabled={!report} onClick={() => downloadFinanceReportCsv({ report, periodType })}>CSV</button><button className="outline" disabled={!report} onClick={() => openFinanceReportPrint({ report, periodType })}>PDF·인쇄</button>{isOwner && <button className="submit" disabled={loading || saving || !report} onClick={save}>{saving ? '저장 중…' : '결산 저장'}</button>}</div></div>
+    <div className="finance-period-controls"><div className="finance-period-tabs">{[['daily','일간'],['weekly','주간'],['monthly','월간'],['annual','연간']].map(([value,label]) => <button className={periodType === value ? 'active' : ''} key={value} onClick={() => setPeriodType(value)}>{label}</button>)}</div><label>기준일<input type="date" value={anchor} onChange={event => setAnchor(event.target.value)}/></label><span>{range.from} ~ {range.to}</span></div>
+    {message && <div className={/못|없|확인/.test(message) ? 'connection-error' : 'expense-review-success'}><span>{message}</span><button onClick={() => setMessage('')}>닫기</button></div>}
+    {report && !report.completeness?.evidenceComplete && <div className="finance-completeness"><b>증빙률 {report.completeness?.evidenceRate ?? 0}%</b><span>확정 지출 {report.completeness?.confirmedExpenses || 0}건 중 증빙 연결 {report.completeness?.evidencedExpenses || 0}건입니다.</span></div>}
+    {report && !report.completeness?.cardReconciliationComplete && <div className="finance-completeness"><b>카드 대사 필요</b><span>선택 기간에 미대사 카드 거래 {report.completeness?.unresolvedCardTransactions || 0}건이 있어 결산 확정이 제한됩니다.</span></div>}
+    {report && !report.completeness?.cardSyncHealthy && <div className="finance-completeness"><b>카드 연결 확인 필요</b><span>오류 또는 재인증이 필요한 카드 연결 {report.completeness?.unhealthyConnections || 0}건을 먼저 복구해 주세요.</span></div>}
+    {report && <div className="finance-operating-metrics"><div><span>주방 구매비</span><b>{won(totals.kitchenPurchases)}</b><small>매출 대비 {totals.kitchenCostRate ?? '-'}%</small></div><div><span>홀 구매비</span><b>{won(totals.hallPurchases)}</b><small>매출 대비 {totals.hallCostRate ?? '-'}%</small></div><div><span>기타 확정 지출</span><b>{won(totals.otherExpenses)}</b><small>증빙 확정 기준</small></div><div><span>카드수수료</span><b>{won(totals.cardFees)}</b><small>설정 {(Number(report.assumptions?.cardFeeRate || 0) * 100).toFixed(1)}%</small></div><div><span>매출연동 임대료</span><b>{won(totals.rentExpense)}</b><small>설정 {(Number(report.assumptions?.revenueRentRate || 0) * 100).toFixed(1)}%</small></div><div><span>주문단가</span><b>{totals.averageOrderValue === null ? '-' : won(totals.averageOrderValue)}</b><small>완료 주문 {totals.orderCount || 0}건</small></div></div>}
+    {loading ? <div className="empty-inline">매출·지출·인건비를 집계하는 중…</div> : report ? <><div className="finance-profit-cards"><div><span>순매출</span><b>{won(totals.netSales)}</b><small>직전 동기간 {rate(report.comparison?.metrics?.netSales?.changeRate)}</small></div><div><span>확정 지출</span><b>{won(totals.operatingExpenses)}</b><small>직전 동기간 {rate(report.comparison?.metrics?.operatingExpenses?.changeRate)}</small></div><div><span>인건비</span><b>{won(totals.laborCost)}</b><small>직전 동기간 {rate(report.comparison?.metrics?.laborCost?.changeRate)}</small></div><div className={totals.operatingProfit < 0 ? 'negative' : 'positive'}><span>운영순익 · 순익률 {totals.profitMargin === null ? '-' : `${totals.profitMargin}%`}</span><b>{won(totals.operatingProfit)}</b><small>직전 동기간 {rate(report.comparison?.metrics?.operatingProfit?.changeRate)}</small></div></div>{!report.completeness?.payrollComplete && <div className="finance-completeness"><b>인건비 확인 필요</b><span>{report.completeness?.missingPayrollMonths?.join(', ')} 급여 초안이 없어 해당 기간 인건비가 0원으로 표시됩니다.</span></div>}{!report.completeness?.reviewComplete && <div className="finance-completeness"><b>증빙 검토 필요</b><span>선택 기간에 미처리 영수증 {report.completeness?.unresolvedReceipts || 0}건이 있어 결산은 초안으로 저장됩니다.</span></div>}<ProfitChart series={report.displaySeries || report.series}/><div className="finance-chart-caption">{periodType === 'annual' ? '월별 운영순익 추이' : '일별 운영순익 추이'} · 비교기간 {report.comparison?.range?.from || '-'} ~ {report.comparison?.range?.to || '-'}</div><div className="closeout-history"><h3>결산 이력</h3>{closeouts.length ? closeouts.slice(0, 8).map(item => <div className="closeout-history-row" key={item.id}><div><b>{item.period_start} ~ {item.period_end}</b><span>{item.period_type} · 버전 {item.version} · 운영순익 {won(item.operating_profit)}</span>{item.reopen_reason && <small>재오픈 사유: {item.reopen_reason}</small>}</div><em className={item.status}>{item.status === 'closed' ? '확정' : item.status === 'ready' ? '확정 가능' : item.status === 'reopened' ? '재오픈' : '초안'}</em>{isOwner && item.status === 'ready' && <button className="submit" disabled={saving} onClick={() => changeStatus(item, 'close')}>결산 확정</button>}{isOwner && item.status === 'closed' && <button className="outline" disabled={saving} onClick={() => changeStatus(item, 'reopen')}>재오픈</button>}</div>) : <div className="empty-inline">저장된 결산이 없습니다.</div>}</div></> : <div className="empty-inline">표시할 결산 데이터가 없습니다.</div>}
+  </section>;
+}

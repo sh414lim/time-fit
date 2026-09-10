@@ -5,3 +5,6 @@ dist/
 backend/.env
 .env
 .env.local
+.env*
+/output/
+/tmp/

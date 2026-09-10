@@ -1,0 +1,6 @@
+/* Keep long staff and payroll forms usable on every desktop viewport. */
+.modal {
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}

@@ -1,0 +1,28 @@
+-- The active manual-staff RPC derives the manager's organization from auth.uid().
+-- Add daily_wage to that active signature (the former migration's UUID signature
+-- is retained only for backwards compatibility with older clients).
+drop function if exists public.timefit_user_create_manual_staff(text,text,text,text,public.timefit_user_pay_type,numeric,numeric,date);
+create function public.timefit_user_create_manual_staff(
+  p_name text, p_phone text, p_department text default null, p_job_title text default null,
+  p_pay_type public.timefit_user_pay_type default 'hourly', p_hourly_wage numeric default null,
+  p_daily_wage numeric default null, p_monthly_salary numeric default null, p_joined_on date default current_date
+) returns uuid language plpgsql security definer set search_path=public as $$
+declare v_org uuid; v_digits text:=regexp_replace(coalesce(p_phone,''),'[^0-9]','','g'); v_id uuid;
+begin
+  select organization_id into v_org from public.timefit_user_memberships where user_id=auth.uid() and role='manager' limit 1;
+  if v_org is null then raise exception 'manager_role_required'; end if;
+  if nullif(trim(p_name),'') is null then raise exception 'name_required'; end if;
+  if length(v_digits) not in (10,11) then raise exception 'invalid_phone'; end if;
+  if p_pay_type='hourly' and coalesce(p_hourly_wage,0)<=0 then raise exception 'hourly_wage_required'; end if;
+  if p_pay_type='daily' and coalesce(p_daily_wage,0)<=0 then raise exception 'daily_wage_required'; end if;
+  if p_pay_type='monthly' and coalesce(p_monthly_salary,0)<=0 then raise exception 'monthly_salary_required'; end if;
+  insert into public.timefit_user_staff(organization_id,user_id,display_name,department,job_title,pay_type,hourly_wage,daily_wage,monthly_salary,joined_on,phone_e164,phone_last4,phone_last8,registration_type)
+  values(v_org,null,trim(p_name),nullif(trim(p_department),''),coalesce(nullif(trim(p_job_title),''),'직원'),p_pay_type,
+    case when p_pay_type='hourly' then p_hourly_wage else null end,
+    case when p_pay_type='daily' then p_daily_wage else null end,
+    case when p_pay_type='monthly' then p_monthly_salary else null end,
+    coalesce(p_joined_on,current_date),'+82'||case when left(v_digits,1)='0' then substr(v_digits,2) else v_digits end,right(v_digits,4),right(v_digits,8),'manual') returning id into v_id;
+  return v_id;
+end $$;
+grant execute on function public.timefit_user_create_manual_staff(text,text,text,text,public.timefit_user_pay_type,numeric,numeric,numeric,date) to authenticated;
+select pg_notify('pgrst','reload schema');
