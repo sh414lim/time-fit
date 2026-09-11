@@ -568,6 +568,16 @@ export async function syncCardConnection({ organizationId, connectionId, mode = 
   });
   return payload;
 }
+export async function reauthenticateCardConnection({ organizationId, connectionId, authentication }) {
+  const payload = await cardConnectionRequest('card-connection-reauth', {
+    method: 'POST', body: { organizationId, connectionId, authentication },
+  });
+  return payload.connection;
+}
+export async function loadCardConnectionHistory({ organizationId, connectionId }) {
+  const payload = await cardConnectionRequest('card-connection-history', { query: { organizationId, connectionId } });
+  return payload.history || [];
+}
 export async function loadCardTransactions(organizationId, from, to) {
   let query = requireClient().from('timefit_user_card_transaction_groups').select('*, card:timefit_user_corporate_cards(issuer,nickname,last4)').eq('organization_id', organizationId).order('approved_at', { ascending: false }).limit(500);
   if (from) query = query.gte('approved_at', `${from}T00:00:00+09:00`);

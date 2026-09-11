@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import cardConnections from '../api/card-connections.js';
+import cardConnectionReauth from '../api/card-connection-reauth.js';
 import cardSync from '../api/card-sync.js';
 import cardSyncWorker from '../api/card-sync-worker.js';
 import { matchScore, matchingClassificationRule, receiptFingerprint, receiptRetryBlocker, structuredReceipt } from '../api/receipt-process.js';
@@ -65,6 +66,38 @@ test('조직 소유자는 Mock 카드 연결 초안을 생성한다', async () =
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('카드 재인증 API는 소유자 확인 없이 인증정보를 바꾸지 않는다', async () => {
+  configure();
+  const res = responseRecorder();
+  await cardConnectionReauth({ method: 'POST', headers: {}, body: { organizationId: 'org-1', connectionId: 'connection-1' } }, res);
+  assert.equal(res.statusCode, 401);
+});
+
+test('카드 재인증은 검증 후 연결을 복구하고 비밀값 없는 감사 이력을 남긴다', async () => {
+  configure();
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const value = String(url); calls.push({ value, options });
+    if (value.includes('/auth/v1/user')) return jsonResponse({ id: 'user-1' });
+    if (value.includes('/timefit_user_organizations')) return jsonResponse([{ id: 'org-1', owner_id: 'user-1' }]);
+    if (value.includes('/timefit_user_card_connections?') && (!options.method || options.method === 'GET')) return jsonResponse([{ id: 'connection-1', organization_id: 'org-1', provider: 'mock', status: 'reauth_required', last_error_code: '401' }]);
+    if (value.includes('/timefit_user_card_connections?') && options.method === 'PATCH') return jsonResponse([{ id: 'connection-1', provider: 'mock', status: 'active', last_error_code: null }]);
+    if (value.endsWith('/rest/v1/timefit_user_expense_audit_logs')) return jsonResponse(null, 201);
+    throw new Error(`unexpected_fetch:${url}`);
+  };
+  try {
+    const res = responseRecorder();
+    await cardConnectionReauth({ method: 'POST', headers: { authorization: 'Bearer user-token' }, body: { organizationId: 'org-1', connectionId: 'connection-1', authentication: {} } }, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.connection.status, 'active');
+    const auditCall = calls.find(call => call.value.endsWith('/rest/v1/timefit_user_expense_audit_logs'));
+    const audit = JSON.parse(auditCall.options.body)[0];
+    assert.equal(audit.action, 'credentials_refreshed');
+    assert.equal(JSON.stringify(audit).includes('password'), false);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('동일 백필 요청은 기존 동기화 작업을 반환한다', async () => {
