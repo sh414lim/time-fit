@@ -73,36 +73,38 @@ export async function downloadFinanceReportXlsx({ report, periodType }) {
   summary.mergeCells('A2:F2');
   summary.getCell('A2').font = { color: { argb: 'FF64748B' } };
   summary.addRow([]);
-  summary.addRow(['순매출', report.totals.netSales, '운영지출', report.totals.operatingExpenses, '인건비', report.totals.laborCost]);
-  summary.addRow(['운영순익', report.totals.operatingProfit, '순익률', report.totals.profitMargin === null ? null : report.totals.profitMargin / 100, '미증빙 카드 지출', report.totals.provisionalCardExpenses || 0]);
-  ['A4','C4','E4','A5','C5','E5'].forEach(cell => {
+  summary.addRow(['순매출', report.totals.netSales, '운영지출 · 잠정 포함', report.totals.operatingExpenses, '인건비', report.totals.laborCost]);
+  summary.addRow(['운영순익', report.totals.operatingProfit, '순익률', report.totals.profitMargin === null ? null : report.totals.profitMargin / 100, '증빙 확정 지출', report.totals.confirmedExpenses || 0]);
+  summary.addRow(['미증빙 카드 지출', report.totals.provisionalCardExpenses || 0, '자동 계산 비용', report.totals.calculatedExpenses || 0, '기타 확정 지출', report.totals.otherExpenses || 0]);
+  ['A4','C4','E4','A5','C5','E5','A6','C6','E6'].forEach(cell => {
     summary.getCell(cell).font = { bold: true, color: { argb: 'FF475569' } };
     summary.getCell(cell).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
   });
-  ['B4','D4','F4','B5','F5'].forEach(cell => {
+  ['B4','D4','F4','B5','F5','B6','D6','F6'].forEach(cell => {
     summary.getCell(cell).numFmt = '#,##0"원";[Red]-#,##0"원"';
     summary.getCell(cell).font = { bold: true };
   });
   summary.getCell('D5').numFmt = '0.0%';
   summary.addRow([]);
   summary.addRow(['증빙률', (report.completeness?.evidenceRate || 0) / 100, '미대사 카드', report.completeness?.unresolvedCardTransactions || 0, '결산 상태', report.audit?.status === 'closed' ? '확정' : '미확정 미리보기']);
-  summary.getCell('B7').numFmt = '0.0%';
+  summary.getCell('B8').numFmt = '0.0%';
   const rows = reportRows(report);
   const chartImage = workbook.addImage({ base64: profitChartDataUrl(rows), extension: 'png' });
-  summary.addImage(chartImage, { tl: { col: 0, row: 8 }, ext: { width: 900, height: 315 } });
+  summary.addImage(chartImage, { tl: { col: 0, row: 9 }, ext: { width: 900, height: 315 } });
   const detail = workbook.addWorksheet('기간별 손익', { views: [{ state: 'frozen', ySplit: 1 }] });
   detail.columns = [
     { header: '기간', key: 'date', width: 16 }, { header: '순매출', key: 'sales', width: 18 },
-    { header: '운영지출', key: 'expenses', width: 18 }, { header: '인건비', key: 'labor', width: 18 },
-    { header: '운영순익', key: 'profit', width: 18 }, { header: '순익률', key: 'margin', width: 13 },
+    { header: '운영지출(잠정 포함)', key: 'expenses', width: 22 }, { header: '증빙 확정 지출', key: 'confirmed', width: 18 },
+    { header: '미증빙 카드 지출', key: 'provisional', width: 19 }, { header: '자동 계산 비용', key: 'calculated', width: 18 },
+    { header: '인건비', key: 'labor', width: 18 }, { header: '운영순익', key: 'profit', width: 18 }, { header: '순익률', key: 'margin', width: 13 },
   ];
-  rows.forEach(row => detail.addRow({ date: row.date, sales: row.sales ?? row.netSales, expenses: row.operatingExpenses, labor: row.laborCost, profit: row.operatingProfit, margin: row.sales ? row.operatingProfit / row.sales : null }));
+  rows.forEach(row => detail.addRow({ date: row.date, sales: row.sales ?? row.netSales, expenses: row.operatingExpenses, confirmed: row.confirmedExpenses, provisional: row.provisionalCardExpenses, calculated: row.calculatedExpenses, labor: row.laborCost, profit: row.operatingProfit, margin: row.sales ? row.operatingProfit / row.sales : null }));
   detail.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
   detail.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF26364D' } };
   detail.getRow(1).alignment = { horizontal: 'center' };
   detail.getColumn(1).alignment = { horizontal: 'center' };
-  [2,3,4,5].forEach(index => { detail.getColumn(index).numFmt = '#,##0"원";[Red]-#,##0"원"'; });
-  detail.getColumn(6).numFmt = '0.0%';
+  [2,3,4,5,6,7,8].forEach(index => { detail.getColumn(index).numFmt = '#,##0"원";[Red]-#,##0"원"'; });
+  detail.getColumn(9).numFmt = '0.0%';
   detail.eachRow((row, index) => {
     if (index > 1 && index % 2 === 1) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
     row.height = 22;
@@ -140,7 +142,7 @@ export async function downloadFinanceReportPdf({ report, periodType }) {
   const { canvas: coverCanvas, context } = makeCanvas();
   drawText(context, 'TimeFit 운영손익 보고서', 84, 94, 44, '#172033', 700);
   drawText(context, `${report.from} ~ ${report.to} · ${periodType}`, 84, 138, 20, '#64748b');
-  const metrics = [['순매출',report.totals.netSales],['운영지출',report.totals.operatingExpenses],['인건비',report.totals.laborCost],['운영순익',report.totals.operatingProfit]];
+  const metrics = [['순매출',report.totals.netSales],['운영지출(잠정 포함)',report.totals.operatingExpenses],['인건비',report.totals.laborCost],['운영순익',report.totals.operatingProfit]];
   metrics.forEach(([label,value], index) => {
     const x = 84 + index * 386;
     context.fillStyle = '#eef3f8';
@@ -148,7 +150,8 @@ export async function downloadFinanceReportPdf({ report, periodType }) {
     drawText(context, label, x + 24, 215, 18, '#64748b', 600);
     drawText(context, won(value), x + 24, 258, 30, '#172033', 700);
   });
-  drawText(context, `미증빙 카드 지출 ${won(report.totals.provisionalCardExpenses || 0)} · 증빙률 ${report.completeness?.evidenceRate ?? 0}% · 미대사 카드 ${report.completeness?.unresolvedCardTransactions || 0}건`, 84, 320, 18, '#64748b');
+  drawText(context, `지출 구성 · 증빙 확정 ${won(report.totals.confirmedExpenses || 0)} · 미증빙 카드 ${won(report.totals.provisionalCardExpenses || 0)} · 자동 계산 ${won(report.totals.calculatedExpenses || 0)}`, 84, 316, 18, '#475569', 600);
+  drawText(context, `증빙률 ${report.completeness?.evidenceRate ?? 0}% · 미대사 카드 ${report.completeness?.unresolvedCardTransactions || 0}건`, 84, 346, 17, '#64748b');
   drawText(context, '기간별 운영순익 추이', 84, 380, 26, '#172033', 700);
   const chart = { x: 124, y: 445, width: 1460, height: 390 };
   context.strokeStyle = '#dbe4f0'; context.lineWidth = 2;

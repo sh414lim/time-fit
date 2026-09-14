@@ -3,7 +3,7 @@ import { loadExpenseLedger } from '../../lib/supabase';
 import { downloadExpenseLedgerCsv } from './expenseExport';
 
 const currentMonth = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit' }).format(new Date());
-const rangeFor = month => { const [year, number] = month.split('-').map(Number); return { from: `${month}-01`, to: new Date(year, number, 0).toISOString().slice(0, 10) }; };
+const rangeFor = month => { const [year, number] = month.split('-').map(Number); return { from: `${month}-01`, to: `${month}-${String(new Date(year, number, 0).getDate()).padStart(2, '0')}` }; };
 
 export default function ExpenseLedgerExport({ organizationId }) {
   const [month, setMonth] = useState(currentMonth); const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');

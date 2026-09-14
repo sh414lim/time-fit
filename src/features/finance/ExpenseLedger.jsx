@@ -17,7 +17,7 @@ const monthRange = (month) => {
   const [year, number] = month.split("-").map(Number);
   return {
     from: `${month}-01`,
-    to: new Date(year, number, 0).toISOString().slice(0, 10),
+    to: `${month}-${String(new Date(year, number, 0).getDate()).padStart(2, "0")}`,
   };
 };
 

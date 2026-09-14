@@ -352,6 +352,8 @@ test('영수증이 없는 미대사 카드 사용액도 잠정 운영지출과 �
   });
   assert.equal(report.totals.confirmedExpenses, 100000);
   assert.equal(report.totals.provisionalCardExpenses, 80000);
+  assert.equal(report.totals.otherExpenses, 0);
+  assert.equal(report.totals.calculatedExpenses, 0);
   assert.equal(report.totals.operatingExpenses, 180000);
   assert.equal(report.totals.operatingProfit, 320000);
   assert.equal(report.series[0].provisionalCardExpenses, 50000);
@@ -371,6 +373,9 @@ test('버터빌라 손익 기준으로 구매비·카드수수료·매출연동 
   assert.equal(report.totals.hallPurchases, 50000);
   assert.equal(report.totals.cardFees, 22000);
   assert.equal(report.totals.rentExpense, 150000);
+  assert.equal(report.totals.otherExpenses, 30000);
+  assert.equal(report.totals.calculatedExpenses, 172000);
+  assert.equal(report.totals.operatingExpenses, 452000);
   assert.equal(report.totals.averageOrderValue, 25000);
   assert.equal(report.totals.operatingProfit, 548000);
 });
@@ -382,10 +387,10 @@ test('연말 보고서는 월별 순익으로 묶고 직전 동기간 증감률�
   assert.deepEqual(previousFinanceRange('2026-03-01', '2026-03-31', 'monthly'), { from: '2026-02-01', to: '2026-02-28' });
   assert.deepEqual(compareFinanceReports(current, previous).netSales, { current: 120, previous: 100, changeRate: 20 });
   const grouped = groupFinanceSeries([
-    { date: '2026-01-01', sales: 10, operatingExpenses: 2, laborCost: 3, operatingProfit: 5 },
-    { date: '2026-01-02', sales: 20, operatingExpenses: 4, laborCost: 6, operatingProfit: 10 },
+    { date: '2026-01-01', sales: 10, confirmedExpenses: 1, provisionalCardExpenses: 0.5, calculatedExpenses: 0.5, operatingExpenses: 2, laborCost: 3, operatingProfit: 5 },
+    { date: '2026-01-02', sales: 20, confirmedExpenses: 2, provisionalCardExpenses: 1, calculatedExpenses: 1, operatingExpenses: 4, laborCost: 6, operatingProfit: 10 },
   ], 'annual');
-  assert.deepEqual(grouped, [{ date: '2026-01', sales: 30, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses: 0, operatingExpenses: 6, laborCost: 9, operatingProfit: 15 }]);
+  assert.deepEqual(grouped, [{ date: '2026-01', sales: 30, confirmedExpenses: 3, provisionalCardExpenses: 1.5, calculatedExpenses: 1.5, operatingExpenses: 6, laborCost: 9, operatingProfit: 15 }]);
 });
 
 test('급여 초안은 실제 출근일과 시급제 근무시간 비중으로 일별 배분한다', () => {

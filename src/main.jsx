@@ -882,7 +882,7 @@ function Leave({ setModal, employees, onSelect, leaveRequests }) { const pending
 
 function Payroll({ employees, onSelect, canManage = false }) {
   const [organizationId, setOrganizationId] = useState(''); const [month, setMonth] = useState(todayKey.slice(0, 7)); const [workspace, setWorkspace] = useState({ contracts: [], draft: null, lines: [] }); const [source, setSource] = useState(null); const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
-  const bounds = value => { const [year, monthNumber] = value.split('-').map(Number); return { start: `${value}-01`, end: new Date(year, monthNumber, 0).toISOString().slice(0, 10) }; };
+  const bounds = value => { const [year, monthNumber] = value.split('-').map(Number); return { start: `${value}-01`, end: `${value}-${String(new Date(year, monthNumber, 0).getDate()).padStart(2, '0')}` }; };
   const refresh = () => { if (!organizationId) return; setLoading(true); Promise.all([loadPayrollWorkspace(organizationId, month), loadWorkforce(organizationId)]).then(([nextWorkspace, workforce]) => { setWorkspace(nextWorkspace); setSource(workforce); }).catch(error => setMessage(error.message || '급여 데이터를 불러오지 못했습니다.')).finally(() => setLoading(false)); };
   useEffect(() => { getAuthContext().then(context => setOrganizationId(context.membership?.organization_id || '')).catch(() => setMessage('사업장 정보를 불러오지 못했습니다.')); }, []);
   useEffect(() => { refresh(); }, [organizationId, month]);
@@ -1037,7 +1037,7 @@ function CorporateCards({ organizationId }) {
   const [message, setMessage] = useState('');
   const [importPreview, setImportPreview] = useState(null);
   const [month, setMonth] = useState(todayKey.slice(0, 7));
-  const range = useMemo(() => { const [year, monthNumber] = month.split('-').map(Number); return { from: `${month}-01`, to: new Date(year, monthNumber, 0).toISOString().slice(0, 10) }; }, [month]);
+  const range = useMemo(() => { const [year, monthNumber] = month.split('-').map(Number); return { from: `${month}-01`, to: `${month}-${String(new Date(year, monthNumber, 0).getDate()).padStart(2, '0')}` }; }, [month]);
   const refresh = async () => { setLoading(true); try { const [nextCards, nextTransactions] = await Promise.all([loadCorporateCards(organizationId), loadCardTransactions(organizationId, range.from, range.to)]); setCards(nextCards); setTransactions(nextTransactions); } catch (error) { setMessage(error.message || '법인카드 정보를 불러오지 못했습니다.'); } finally { setLoading(false); } };
   useEffect(() => { if (organizationId) refresh(); }, [organizationId, month]);
   const chooseGranterFile = async event => {
@@ -1088,7 +1088,7 @@ function CorporateCards({ organizationId }) {
 
 function LegacyCorporateCards({ organizationId, employees = [] }) {
   const [cards, setCards] = useState([]); const [transactions, setTransactions] = useState([]); const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(''); const [showForm, setShowForm] = useState(false); const [showConnection, setShowConnection] = useState(false); const [month, setMonth] = useState(todayKey.slice(0, 7)); const [selectedCardId, setSelectedCardId] = useState('');
-  const range = useMemo(() => { const [year, monthNumber] = month.split('-').map(Number); return { from: `${month}-01`, to: new Date(year, monthNumber, 0).toISOString().slice(0, 10) }; }, [month]);
+  const range = useMemo(() => { const [year, monthNumber] = month.split('-').map(Number); return { from: `${month}-01`, to: `${month}-${String(new Date(year, monthNumber, 0).getDate()).padStart(2, '0')}` }; }, [month]);
   const refresh = async () => { setLoading(true); try { const [nextCards, nextTransactions] = await Promise.all([loadCorporateCards(organizationId), loadCardTransactions(organizationId, range.from, range.to)]); setCards(nextCards); setTransactions(nextTransactions); setSelectedCardId(current => current || nextCards[0]?.id || ''); } catch (error) { setMessage(error.message || '법인카드 정보를 불러오지 못했습니다.'); } finally { setLoading(false); } };
   useEffect(() => { if (!organizationId) return undefined; refresh(); const handleSync = () => refresh(); window.addEventListener('timefit-card-sync-complete', handleSync); return () => window.removeEventListener('timefit-card-sync-complete', handleSync); }, [organizationId, month]);
   const addCard = async event => { event.preventDefault(); const form = new FormData(event.currentTarget); setBusy(true); try { const card = await createCorporateCard({ organizationId, issuer: form.get('issuer'), nickname: form.get('nickname'), last4: form.get('last4'), holderStaffId: form.get('holderStaffId') }); setCards(items => [card, ...items]); setSelectedCardId(card.id); setShowForm(false); event.currentTarget.reset(); setMessage('법인카드를 등록했어요. 카드번호 전체와 CVC는 저장하지 않습니다.'); } catch (error) { setMessage(error.message || '법인카드를 등록하지 못했습니다.'); } finally { setBusy(false); } };
@@ -1103,7 +1103,7 @@ function LegacyCorporateCards({ organizationId, employees = [] }) {
 
 function FinanceDocuments({ organizationId, employees = [] }) {
   const [documents, setDocuments] = useState([]); const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(''); const [settlementMonth, setSettlementMonth] = useState(todayKey.slice(0, 7)); const [accountantEmail, setAccountantEmail] = useState(''); const [sales, setSales] = useState(null); const [salesError, setSalesError] = useState('');
-  const monthRange = month => { const [year, monthNumber] = month.split('-').map(Number); const start = `${month}-01`; const end = new Date(year, monthNumber, 0).toISOString().slice(0, 10); return { start, end }; };
+  const monthRange = month => { const [year, monthNumber] = month.split('-').map(Number); const start = `${month}-01`; const end = `${month}-${String(new Date(year, monthNumber, 0).getDate()).padStart(2, '0')}`; return { start, end }; };
   const refresh = () => { setLoading(true); Promise.all([loadFinanceDocuments(organizationId), getOrganizationSettings(organizationId)]).then(([items, settings]) => { setDocuments(items); setAccountantEmail(settings?.accountant_email || ''); }).catch(error => setMessage(error.message || '문서 목록을 불러오지 못했습니다.')).finally(() => setLoading(false)); };
   useEffect(() => { if (organizationId) refresh(); }, [organizationId]);
   useEffect(() => { const input = document.querySelector('.manager input[name="file"]'); if (!input) return; input.setAttribute('accept', 'image/jpeg,image/png,image/webp,image/heic,image/heif,.pdf,.csv,.xls,.xlsx'); input.setAttribute('capture', 'environment'); }, []);
