@@ -5,6 +5,21 @@ const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export const supabase = url && anonKey ? createClient(url, anonKey) : null;
 let refreshSessionInFlight = null;
+const FINANCE_CACHE_TTL = 2 * 60 * 1000;
+const financeReadCache = new Map();
+const financeReadInFlight = new Map();
+const financeCacheKey = (path, query = {}) => `${path}?${Object.entries(query).filter(([, value]) => value !== undefined && value !== '').sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => `${key}=${String(value)}`).join('&')}`;
+const peekFinanceCache = (path, query) => {
+  const entry = financeReadCache.get(financeCacheKey(path, query));
+  return entry ? { ...entry, isFresh: Date.now() - entry.cachedAt < FINANCE_CACHE_TTL } : null;
+};
+async function cachedFinanceRead(path, query, { force = false } = {}) {
+  const key = financeCacheKey(path, query); const cached = peekFinanceCache(path, query);
+  if (!force && cached?.isFresh) return cached.data;
+  if (!force && financeReadInFlight.has(key)) return financeReadInFlight.get(key);
+  const request = cardConnectionRequest(path, { query }).then(data => { financeReadCache.set(key, { data, cachedAt: Date.now() }); return data; }).finally(() => financeReadInFlight.delete(key));
+  financeReadInFlight.set(key, request); return request;
+}
 
 // A stalled network request must never leave the application behind an
 // indefinite full-screen loader. Keep the timeout here so auth and workforce
@@ -454,8 +469,9 @@ export async function markExpenseReceiptReminderRead(id) {
 export async function runExpenseReminderScan(organizationId) {
   return cardConnectionRequest('expense-reminder-worker', { method: 'POST', body: { organizationId } });
 }
-export async function loadExpenseLedger(organizationId, filters = {}) {
-  return cardConnectionRequest('expenses', { query: { organizationId, ...filters } });
+export function getCachedExpenseLedger(organizationId, filters = {}) { return peekFinanceCache('expenses', { organizationId, ...filters }); }
+export async function loadExpenseLedger(organizationId, filters = {}, options = {}) {
+  return cachedFinanceRead('expenses', { organizationId, ...filters }, options);
 }
 export async function loadExpenseDetail(organizationId, expenseId) {
   return cardConnectionRequest('expense-detail', { query: { organizationId, expenseId } });
@@ -467,8 +483,9 @@ export async function processReceiptDocument({ organizationId, documentId }) {
   const payload = await cardConnectionRequest('receipt-process', { method: 'POST', body: { organizationId, documentId } });
   return payload;
 }
-export async function loadExpenseReviewQueue(organizationId, status = 'attention', range = {}) {
-  const payload = await cardConnectionRequest('expense-review', { query: { organizationId, status, ...range } });
+export function getCachedExpenseReviewQueue(organizationId, status = 'attention', range = {}) { return peekFinanceCache('expense-review', { organizationId, status, ...range }); }
+export async function loadExpenseReviewQueue(organizationId, status = 'attention', range = {}, options = {}) {
+  const payload = await cachedFinanceRead('expense-review', { organizationId, status, ...range }, options);
   return payload.documents || [];
 }
 export async function reviewExpenseMatch({ organizationId, matchId, action }) {
@@ -486,24 +503,27 @@ export async function excludeExpenseDraft({ organizationId, expenseId }) {
   const payload = await cardConnectionRequest('expense-review', { method: 'POST', body: { organizationId, expenseId, action: 'exclude' } });
   return payload.result;
 }
-export async function loadFinanceReport({ organizationId, periodType, from, to }) {
-  const payload = await cardConnectionRequest('finance-report', { query: { organizationId, periodType, from, to } });
+export function getCachedFinanceReport({ organizationId, periodType, from, to }) { return peekFinanceCache('finance-report', { organizationId, periodType, from, to }); }
+export async function loadFinanceReport({ organizationId, periodType, from, to }, options = {}) {
+  const payload = await cachedFinanceRead('finance-report', { organizationId, periodType, from, to }, options);
   return payload.report;
 }
 export async function createFinanceCloseout({ organizationId, periodType, from, to }) {
   const payload = await cardConnectionRequest('finance-report', { method: 'POST', body: { organizationId, periodType, from, to } });
   return payload;
 }
-export async function loadFinanceCloseouts(organizationId) {
-  const payload = await cardConnectionRequest('closeouts', { query: { organizationId } });
+export function getCachedFinanceCloseouts(organizationId) { return peekFinanceCache('closeouts', { organizationId }); }
+export async function loadFinanceCloseouts(organizationId, options = {}) {
+  const payload = await cachedFinanceRead('closeouts', { organizationId }, options);
   return payload.closeouts || [];
 }
 export async function changeFinanceCloseout({ organizationId, closeoutId, action, reason }) {
   const payload = await cardConnectionRequest('closeouts', { method: 'POST', body: { organizationId, closeoutId, action, reason } });
   return payload.result;
 }
-export async function loadExpenseExceptions(organizationId) {
-  const payload = await cardConnectionRequest('expense-exceptions', { query: { organizationId } });
+export function getCachedExpenseExceptions(organizationId) { return peekFinanceCache('expense-exceptions', { organizationId }); }
+export async function loadExpenseExceptions(organizationId, options = {}) {
+  const payload = await cachedFinanceRead('expense-exceptions', { organizationId }, options);
   return { items: payload.items || [], summary: payload.summary || {} };
 }
 export async function openFinanceDocument(path) {
@@ -566,6 +586,10 @@ async function cardConnectionRequest(path, { method = 'GET', query, body } = {})
     error.code = payload.code || null;
     error.status = response.status;
     throw error;
+  }
+  if (method !== 'GET') {
+    const organizationId = body?.organizationId;
+    for (const key of financeReadCache.keys()) if (!organizationId || key.includes(`organizationId=${organizationId}`)) financeReadCache.delete(key);
   }
   return payload;
 }

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   bulkConfirmExpenseMatches,
   excludeExpenseDraft,
+  getCachedExpenseReviewQueue,
   loadExpenseReviewQueue,
   openFinanceDocument,
   processReceiptDocument,
@@ -21,10 +22,11 @@ export default function ExpenseReviewQueue({ organizationId }) {
   const [message, setMessage] = useState('');
   const [selectedIds, setSelectedIds] = useState([]);
 
-  const refresh = async () => {
+  const refresh = async ({ force = false } = {}) => {
     if (!organizationId) return;
-    setLoading(true);
-    try { const next = await loadExpenseReviewQueue(organizationId, 'attention', { from, to }); setDocuments(next); const available = new Set(next.map(item => item.matches?.[0]).filter(match => match?.status === 'suggested' && Number(match.score) >= 95).map(match => match.id)); setSelectedIds(ids => ids.filter(id => available.has(id))); }
+    const cached = getCachedExpenseReviewQueue(organizationId, 'attention', { from, to });
+    if (!force && cached) { setDocuments(cached.data.documents || []); setLoading(false); if (cached.isFresh) return; } else setLoading(true);
+    try { const next = await loadExpenseReviewQueue(organizationId, 'attention', { from, to }, { force }); setDocuments(next); const available = new Set(next.map(item => item.matches?.[0]).filter(match => match?.status === 'suggested' && Number(match.score) >= 95).map(match => match.id)); setSelectedIds(ids => ids.filter(id => available.has(id))); }
     catch (error) { setMessage(error.message || '확인 필요 영수증을 불러오지 못했습니다.'); }
     finally { setLoading(false); }
   };

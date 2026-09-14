@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  getCachedExpenseLedger,
   loadExpenseDetail,
   loadExpenseLedger,
   openFinanceDocument,
@@ -54,19 +55,15 @@ export default function ExpenseLedger({ organizationId, focusDate = "" }) {
           : monthRange(month),
     [month, focusDate, rangeMode, customFrom, customTo],
   );
-  const refresh = async () => {
+  const refresh = async ({ force = false } = {}) => {
     if (!organizationId) return;
-    setLoading(true);
+    const filters = { ...range, status, category, query: query.trim() };
+    const cached = getCachedExpenseLedger(organizationId, filters);
+    if (!force && cached) { setData(cached.data); setLoading(false); if (cached.isFresh) return; }
+    else setLoading(true);
     setError("");
     try {
-      setData(
-        await loadExpenseLedger(organizationId, {
-          ...range,
-          status,
-          category,
-          query: query.trim(),
-        }),
-      );
+      setData(await loadExpenseLedger(organizationId, filters, { force }));
     } catch (nextError) {
       setError(nextError.message || "지출 원장을 불러오지 못했습니다.");
     } finally {
@@ -119,7 +116,7 @@ export default function ExpenseLedger({ organizationId, focusDate = "" }) {
           <h2>{focusDate ? focusDate + " 지출 원장" : "전체 지출 원장"}</h2>
           <p>영수증이 없어도 카드 승인 지출을 함께 표시합니다. 과거 월 또는 원하는 기간을 조회할 수 있습니다.</p>
         </div>
-        <button className="outline" onClick={refresh} disabled={loading}>
+        <button className="outline" onClick={() => refresh({ force: true })} disabled={loading}>
           {loading ? "조회 중…" : "새로고침"}
         </button>
       </div>
@@ -196,7 +193,7 @@ export default function ExpenseLedger({ organizationId, focusDate = "" }) {
       {error ? (
         <div className="connection-error">
           <span>{error}</span>
-          <button onClick={refresh}>다시 시도</button>
+          <button onClick={() => refresh({ force: true })}>다시 시도</button>
         </div>
       ) : loading ? (
         <div className="empty-inline">지출 원장을 집계하는 중…</div>

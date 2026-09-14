@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { changeFinanceCloseout, createFinanceCloseout, getAuthContext, loadFinanceCloseouts, loadFinanceReport } from '../../lib/supabase';
+import { changeFinanceCloseout, createFinanceCloseout, getAuthContext, getCachedFinanceCloseouts, getCachedFinanceReport, loadFinanceCloseouts, loadFinanceReport } from '../../lib/supabase';
 import { downloadFinanceReportCsv } from './financeReportExport';
 import { downloadFinanceReportPdf, downloadFinanceReportXlsx } from './financeReportDownload';
 import ProfitSummaryTable from './ProfitSummaryTable';
@@ -32,12 +32,12 @@ export default function FinanceReportDashboard({ organizationId, onOpenLedger })
   const [isOwner, setIsOwner] = useState(false);
   const [closeouts, setCloseouts] = useState([]);
   const range = useMemo(() => periodType === 'custom' ? { from: customFrom, to: customTo } : rangeFor(periodType, anchor), [periodType, anchor, customFrom, customTo]);
-  const refresh = async () => { if (!organizationId) return; setLoading(true); setMessage(''); try { setReport(await loadFinanceReport({ organizationId, periodType, ...range })); } catch (error) { setMessage(error.message || '결산 데이터를 불러오지 못했습니다.'); } finally { setLoading(false); } };
+  const refresh = async ({ force = false } = {}) => { if (!organizationId) return; const input = { organizationId, periodType, ...range }; const cached = getCachedFinanceReport(input); if (!force && cached) { setReport(cached.data.report); setLoading(false); if (cached.isFresh) return; } else setLoading(true); setMessage(''); try { setReport(await loadFinanceReport(input, { force })); } catch (error) { setMessage(error.message || '결산 데이터를 불러오지 못했습니다.'); } finally { setLoading(false); } };
   useEffect(() => { refresh(); }, [organizationId, periodType, range.from, range.to]);
   useEffect(() => { const handleCreated = () => refresh(); window.addEventListener('timefit-expense-created', handleCreated); return () => window.removeEventListener('timefit-expense-created', handleCreated); }, [organizationId, periodType, range.from, range.to]);
   useEffect(() => { const handleSalesSync = event => { if (!event.detail?.organizationId || event.detail.organizationId === organizationId) refresh(); }; window.addEventListener('timefit-sales-sync-complete', handleSalesSync); return () => window.removeEventListener('timefit-sales-sync-complete', handleSalesSync); }, [organizationId, periodType, range.from, range.to]);
   useEffect(() => { getAuthContext().then(context => setIsOwner(Boolean(context.isOrganizationOwner))).catch(() => setIsOwner(false)); }, [organizationId]);
-  const refreshCloseouts = async () => { if (!organizationId) return; try { setCloseouts(await loadFinanceCloseouts(organizationId)); } catch (error) { setMessage(error.message || '결산 이력을 불러오지 못했습니다.'); } };
+  const refreshCloseouts = async ({ force = false } = {}) => { if (!organizationId) return; const cached = getCachedFinanceCloseouts(organizationId); if (!force && cached) { setCloseouts(cached.data.closeouts || []); if (cached.isFresh) return; } try { setCloseouts(await loadFinanceCloseouts(organizationId, { force })); } catch (error) { setMessage(error.message || '결산 이력을 불러오지 못했습니다.'); } };
   useEffect(() => { refreshCloseouts(); }, [organizationId]);
   const save = async () => { setSaving(true); setMessage(''); try { const result = await createFinanceCloseout({ organizationId, periodType, ...range }); setMessage(`${result.closeout.status === 'ready' ? '결산 준비' : '결산 초안'} 버전 ${result.closeout.version}을 저장했어요.`); await refreshCloseouts(); } catch (error) { setMessage(error.message || '결산 스냅샷을 저장하지 못했습니다.'); } finally { setSaving(false); } };
   const changeStatus = async (closeout, action) => { const reason = action === 'reopen' ? window.prompt('재오픈 사유를 5자 이상 입력해 주세요.') : ''; if (action === 'reopen' && reason === null) return; if (action === 'close' && !window.confirm(`${closeout.period_start} ~ ${closeout.period_end} 결산을 확정할까요?`)) return; setSaving(true); setMessage(''); try { await changeFinanceCloseout({ organizationId, closeoutId: closeout.id, action, reason }); setMessage(action === 'close' ? '결산을 확정했어요.' : '사유를 기록하고 결산을 재오픈했어요.'); await refreshCloseouts(); } catch (error) { setMessage(error.message || '결산 상태를 변경하지 못했습니다.'); } finally { setSaving(false); } };
