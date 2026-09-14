@@ -1,5 +1,3 @@
-import notoSansKrUrl from '../../assets/fonts/NotoSansKR.ttf?url';
-
 const won = value => `${Math.round(Number(value) || 0).toLocaleString('ko-KR')}원`;
 const filePeriod = report => `${report.from}_${report.to}`;
 const reportRows = report => report?.displaySeries || report?.series || [];
@@ -114,61 +112,79 @@ export async function downloadFinanceReportXlsx({ report, periodType }) {
 }
 
 export async function downloadFinanceReportPdf({ report, periodType }) {
-  const [{ PDFDocument, rgb }, fontkitModule] = await Promise.all([import('pdf-lib'), import('@pdf-lib/fontkit')]);
-  const document = await PDFDocument.create();
-  document.registerFontkit(fontkitModule.default || fontkitModule);
-  const fontBytes = await fetch(notoSansKrUrl).then(response => {
-    if (!response.ok) throw new Error('PDF 한글 폰트를 불러오지 못했습니다.');
-    return response.arrayBuffer();
-  });
-  const font = await document.embedFont(fontBytes, { subset: true });
+  const { PDFDocument } = await import('pdf-lib');
+  const pdfDocument = await PDFDocument.create();
   const pageSize = [841.89, 595.28];
   const rows = reportRows(report);
-  const navy = rgb(0.09, 0.13, 0.2); const blue = rgb(0.18, 0.5, 0.93); const gray = rgb(0.4, 0.45, 0.53); const light = rgb(0.92, 0.95, 0.98);
-  const text = (page, value, x, y, size = 10, color = navy) => page.drawText(String(value ?? ''), { x, y, size, font, color });
-  const page = document.addPage(pageSize);
-  text(page, 'TimeFit 운영손익 보고서', 42, 548, 22);
-  text(page, `${report.from} ~ ${report.to} · ${periodType}`, 42, 526, 10, gray);
+  const canvasSize = [1684, 1190];
+  const makeCanvas = () => {
+    const canvas = document.createElement('canvas');
+    [canvas.width, canvas.height] = canvasSize;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.textBaseline = 'alphabetic';
+    return { canvas, context };
+  };
+  const drawText = (context, value, x, y, size = 20, color = '#172033', weight = 400, align = 'left') => {
+    context.fillStyle = color;
+    context.font = `${weight} ${size}px "Noto Sans KR", "Apple SD Gothic Neo", sans-serif`;
+    context.textAlign = align;
+    context.fillText(String(value ?? ''), x, y);
+  };
+  const appendCanvas = async canvas => {
+    const image = await pdfDocument.embedPng(canvas.toDataURL('image/png'));
+    const page = pdfDocument.addPage(pageSize);
+    page.drawImage(image, { x: 0, y: 0, width: pageSize[0], height: pageSize[1] });
+  };
+  const { canvas: coverCanvas, context } = makeCanvas();
+  drawText(context, 'TimeFit 운영손익 보고서', 84, 94, 44, '#172033', 700);
+  drawText(context, `${report.from} ~ ${report.to} · ${periodType}`, 84, 138, 20, '#64748b');
   const metrics = [['순매출',report.totals.netSales],['운영지출',report.totals.operatingExpenses],['인건비',report.totals.laborCost],['운영순익',report.totals.operatingProfit]];
   metrics.forEach(([label,value], index) => {
-    const x = 42 + index * 193;
-    page.drawRectangle({ x, y: 456, width: 178, height: 54, color: light });
-    text(page, label, x + 12, 490, 9, gray);
-    text(page, won(value), x + 12, 469, 15);
+    const x = 84 + index * 386;
+    context.fillStyle = '#eef3f8';
+    context.fillRect(x, 170, 356, 108);
+    drawText(context, label, x + 24, 215, 18, '#64748b', 600);
+    drawText(context, won(value), x + 24, 258, 30, '#172033', 700);
   });
-  text(page, `미증빙 카드 지출 ${won(report.totals.provisionalCardExpenses || 0)} · 증빙률 ${report.completeness?.evidenceRate ?? 0}% · 미대사 카드 ${report.completeness?.unresolvedCardTransactions || 0}건`, 42, 438, 9, gray);
-  text(page, '기간별 운영순익 추이', 42, 414, 13);
-  const chart = { x: 62, y: 195, width: 730, height: 195 };
-  page.drawLine({ start: { x: chart.x, y: chart.y + chart.height / 2 }, end: { x: chart.x + chart.width, y: chart.y + chart.height / 2 }, thickness: 1, color: light });
+  drawText(context, `미증빙 카드 지출 ${won(report.totals.provisionalCardExpenses || 0)} · 증빙률 ${report.completeness?.evidenceRate ?? 0}% · 미대사 카드 ${report.completeness?.unresolvedCardTransactions || 0}건`, 84, 320, 18, '#64748b');
+  drawText(context, '기간별 운영순익 추이', 84, 380, 26, '#172033', 700);
+  const chart = { x: 124, y: 445, width: 1460, height: 390 };
+  context.strokeStyle = '#dbe4f0'; context.lineWidth = 2;
+  context.beginPath(); context.moveTo(chart.x, chart.y + chart.height / 2); context.lineTo(chart.x + chart.width, chart.y + chart.height / 2); context.stroke();
   const max = Math.max(1, ...rows.map(row => Math.abs(Number(row.operatingProfit || 0))));
-  const points = rows.map((row,index) => ({ x: chart.x + (rows.length === 1 ? chart.width / 2 : index * chart.width / (rows.length - 1)), y: chart.y + chart.height / 2 + Number(row.operatingProfit || 0) / max * chart.height * 0.43 }));
-  points.slice(1).forEach((point,index) => page.drawLine({ start: points[index], end: point, thickness: 2.2, color: blue }));
-  points.forEach(point => page.drawCircle({ x: point.x, y: point.y, size: 2.3, color: blue }));
-  text(page, `+${won(max)}`, 42, chart.y + chart.height - 5, 8, gray);
-  text(page, '0', 42, chart.y + chart.height / 2 - 3, 8, gray);
-  text(page, `-${won(max)}`, 42, chart.y, 8, gray);
+  const points = rows.map((row,index) => ({ x: chart.x + (rows.length === 1 ? chart.width / 2 : index * chart.width / (rows.length - 1)), y: chart.y + chart.height / 2 - Number(row.operatingProfit || 0) / max * chart.height * 0.43 }));
+  context.strokeStyle = '#2f80ed'; context.lineWidth = 5; context.lineJoin = 'round'; context.beginPath();
+  points.forEach((point,index) => index ? context.lineTo(point.x, point.y) : context.moveTo(point.x, point.y)); context.stroke();
+  context.fillStyle = '#2f80ed'; points.forEach(point => { context.beginPath(); context.arc(point.x, point.y, 4.5, 0, Math.PI * 2); context.fill(); });
+  drawText(context, `+${won(max)}`, 84, chart.y + 12, 16, '#64748b', 400, 'right');
+  drawText(context, '0', 84, chart.y + chart.height / 2 + 5, 16, '#64748b', 400, 'right');
+  drawText(context, `-${won(max)}`, 84, chart.y + chart.height, 16, '#64748b', 400, 'right');
   if (rows.length) {
-    text(page, rows[0].date, chart.x, 178, 8, gray);
-    text(page, rows.at(-1).date, chart.x + chart.width - 55, 178, 8, gray);
+    drawText(context, rows[0].date, chart.x, 874, 16, '#64748b');
+    drawText(context, rows.at(-1).date, chart.x + chart.width, 874, 16, '#64748b', 400, 'right');
   }
-  text(page, '세부 내역은 다음 페이지에서 확인할 수 있습니다.', 42, 145, 9, gray);
-  const columns = [{ label:'기간',x:42 },{ label:'순매출',x:147 },{ label:'운영지출',x:289 },{ label:'인건비',x:431 },{ label:'운영순익',x:573 },{ label:'순익률',x:715 }];
+  drawText(context, '세부 내역은 다음 페이지에서 확인할 수 있습니다.', 84, 940, 18, '#64748b');
+  await appendCanvas(coverCanvas);
+  const columns = [{ label:'기간',x:84 },{ label:'순매출',x:294 },{ label:'운영지출',x:578 },{ label:'인건비',x:862 },{ label:'운영순익',x:1146 },{ label:'순익률',x:1430 }];
   const perPage = 20;
   for (let offset = 0; offset < rows.length; offset += perPage) {
-    const tablePage = document.addPage(pageSize);
-    text(tablePage, '기간별 손익표', 42, 548, 18);
-    text(tablePage, `${report.from} ~ ${report.to}`, 42, 528, 9, gray);
-    tablePage.drawRectangle({ x: 42, y: 492, width: 757, height: 24, color: navy });
-    columns.forEach(column => text(tablePage, column.label, column.x + 6, 500, 9, rgb(1,1,1)));
+    const { canvas, context: tableContext } = makeCanvas();
+    drawText(tableContext, '기간별 손익표', 84, 94, 36, '#172033', 700);
+    drawText(tableContext, `${report.from} ~ ${report.to}`, 84, 134, 18, '#64748b');
+    tableContext.fillStyle = '#26364d'; tableContext.fillRect(84, 170, 1516, 48);
+    columns.forEach(column => drawText(tableContext, column.label, column.x + 12, 202, 18, '#ffffff', 700));
     rows.slice(offset, offset + perPage).forEach((row,index) => {
-      const y = 466 - index * 21;
-      if (index % 2 === 0) tablePage.drawRectangle({ x:42,y:y-5,width:757,height:21,color:rgb(0.97,0.98,0.99) });
+      const y = 258 + index * 42;
+      if (index % 2 === 0) { tableContext.fillStyle = '#f8fafc'; tableContext.fillRect(84, y - 29, 1516, 42); }
       const margin = row.sales ? `${Math.round(row.operatingProfit / row.sales * 1000) / 10}%` : '-';
       const values = [row.date,won(row.sales ?? row.netSales),won(row.operatingExpenses),won(row.laborCost),won(row.operatingProfit),margin];
-      values.forEach((value,columnIndex) => text(tablePage,value,columns[columnIndex].x+6,y,8.5,columnIndex===4&&Number(row.operatingProfit)<0?rgb(0.8,0.12,0.12):navy));
+      values.forEach((value,columnIndex) => drawText(tableContext,value,columns[columnIndex].x+12,y,17,columnIndex===4&&Number(row.operatingProfit)<0?'#cc1f1f':'#172033'));
     });
-    text(tablePage, `${offset / perPage + 2} / ${Math.ceil(rows.length / perPage) + 1}`, 760, 24, 8, gray);
+    drawText(tableContext, `${offset / perPage + 2} / ${Math.ceil(rows.length / perPage) + 1}`, 1576, 1140, 16, '#64748b', 400, 'right');
+    await appendCanvas(canvas);
   }
-  const bytes = await document.save();
+  const bytes = await pdfDocument.save();
   downloadBlob(new Blob([bytes], { type: 'application/pdf' }), `timefit-finance-${filePeriod(report)}.pdf`);
 }
