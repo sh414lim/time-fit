@@ -390,7 +390,7 @@ test('연말 보고서는 월별 순익으로 묶고 직전 동기간 증감률�
     { date: '2026-01-01', sales: 10, confirmedExpenses: 1, provisionalCardExpenses: 0.5, calculatedExpenses: 0.5, operatingExpenses: 2, laborCost: 3, operatingProfit: 5 },
     { date: '2026-01-02', sales: 20, confirmedExpenses: 2, provisionalCardExpenses: 1, calculatedExpenses: 1, operatingExpenses: 4, laborCost: 6, operatingProfit: 10 },
   ], 'annual');
-  assert.deepEqual(grouped, [{ date: '2026-01', sales: 30, confirmedExpenses: 3, provisionalCardExpenses: 1.5, calculatedExpenses: 1.5, operatingExpenses: 6, laborCost: 9, operatingProfit: 15 }]);
+  assert.deepEqual(grouped, [{ date: '2026-01', sales: 30, orderCount: 0, confirmedExpenses: 3, provisionalCardExpenses: 1.5, calculatedExpenses: 1.5, cardFees: 0, rentExpense: 0, operatingExpenses: 6, laborCost: 9, operatingProfit: 15 }]);
 });
 
 test('급여 초안은 실제 출근일과 시급제 근무시간 비중으로 일별 배분한다', () => {

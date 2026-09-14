@@ -361,6 +361,10 @@
 .finance-detail-scroll { overflow-x: auto; }
 .finance-detail-head, .finance-detail-scroll article { display: grid; grid-template-columns: minmax(105px,1.2fr) repeat(8,minmax(105px,1fr)); align-items: center; min-width: 1050px; }
 .finance-detail-head { padding: 10px 16px; background: #f7f9fb; color: #8b95a1; font-size: 10px; font-weight: 800; }
+.finance-detail-head > span, .finance-value-cell { display: grid; gap: 3px; }
+.finance-detail-head small { color: #a7b0bc; font-size: 8px; font-weight: 600; }
+.finance-value-cell b { color: #333d4b; font-size: 11px; }
+.finance-value-cell small { white-space: nowrap; font-size: 8px; }
 .finance-detail-scroll article { padding: 13px 16px; border-top: 1px solid #f0f2f5; color: #333d4b; font-size: 11px; }
 .finance-detail-scroll article:first-of-type { border-top: 0; }
 .finance-detail-scroll article > span:not(:first-child), .finance-detail-scroll article > strong, .finance-detail-scroll article > em { text-align: right; }

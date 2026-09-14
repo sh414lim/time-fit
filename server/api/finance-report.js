@@ -23,8 +23,8 @@ export function groupFinanceSeries(series = [], periodType = 'monthly') {
   const months = new Map();
   series.forEach(day => {
     const key = day.date.slice(0, 7);
-    const row = months.get(key) || { date: key, sales: 0, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses: 0, operatingExpenses: 0, laborCost: 0, operatingProfit: 0 };
-    for (const field of ['sales','confirmedExpenses','provisionalCardExpenses','calculatedExpenses','operatingExpenses','laborCost','operatingProfit']) row[field] += Number(day[field] || 0);
+    const row = months.get(key) || { date: key, sales: 0, orderCount: 0, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses: 0, cardFees: 0, rentExpense: 0, operatingExpenses: 0, laborCost: 0, operatingProfit: 0 };
+    for (const field of ['sales','orderCount','confirmedExpenses','provisionalCardExpenses','calculatedExpenses','cardFees','rentExpense','operatingExpenses','laborCost','operatingProfit']) row[field] += Number(day[field] || 0);
     months.set(key, row);
   });
   return [...months.values()];
