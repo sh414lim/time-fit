@@ -17,10 +17,12 @@ export function financeReportCsvRows({ report, periodType }) {
     ['카드수수료',report.totals.cardFees || 0,'매출연동 임대료',report.totals.rentExpense || 0,'평균 주문단가',report.totals.averageOrderValue || 0],
     ['운영지출 · 잠정 포함',report.totals.operatingExpenses || 0,'증빙 확정 지출',report.totals.confirmedExpenses || 0,'미증빙 카드 지출',report.totals.provisionalCardExpenses || 0],
     ['자동 계산 비용',report.totals.calculatedExpenses || 0,'카드수수료',report.totals.cardFees || 0,'매출연동 임대료',report.totals.rentExpense || 0],
+    ['현재 실적 순매출',report.actualTotals?.netSales ?? report.totals.netSales,'현재 실적 순익',report.actualTotals?.operatingProfit ?? report.totals.operatingProfit,'미래 예상 지출',report.totals.forecastExpenses || 0],
+    ['예측 기준',report.hasForecast ? `완료 영업일 ${report.forecast?.baselineDays || 0}일 요일별 평균` : '예측 없음','실제 변동지출률',`${report.forecast?.variableExpenseRate || 0}%`,'실적 기준일',report.asOfDate || report.to],
     [],
-    ['기간유형','날짜','순매출','운영지출(잠정 포함)','증빙 확정 지출','미증빙 카드 지출','자동 계산 비용','인건비','운영순익'],
-    ['합계',`${report.from}~${report.to}`,report.totals.netSales,report.totals.operatingExpenses,report.totals.confirmedExpenses,report.totals.provisionalCardExpenses,report.totals.calculatedExpenses,report.totals.laborCost,report.totals.operatingProfit],
-    ...(report?.displaySeries || report?.series || []).map(item => [periodType,item.date,item.sales ?? item.netSales,item.operatingExpenses,item.confirmedExpenses,item.provisionalCardExpenses,item.calculatedExpenses,item.laborCost,item.operatingProfit]),
+    ['기간유형','날짜','구분','순매출','운영지출(잠정 포함)','증빙 확정 지출','미증빙 카드 지출','미래 예상 지출','자동 계산 비용','인건비','운영순익'],
+    ['합계',`${report.from}~${report.to}`,report.hasForecast ? '기간 말 예상' : '실적',report.totals.netSales,report.totals.operatingExpenses,report.totals.confirmedExpenses,report.totals.provisionalCardExpenses,report.totals.forecastExpenses,report.totals.calculatedExpenses,report.totals.laborCost,report.totals.operatingProfit],
+    ...(report?.displaySeries || report?.series || []).map(item => [periodType,item.date,item.dataStatus === 'forecast' ? '예상' : item.dataStatus === 'in_progress' ? '진행 중' : '실적',item.sales ?? item.netSales,item.operatingExpenses,item.confirmedExpenses,item.provisionalCardExpenses,item.forecastExpenses,item.calculatedExpenses,item.laborCost,item.operatingProfit]),
   ];
 }
 

@@ -1,6 +1,7 @@
 import { authorizeFinance, financeError, financeRest, financeServerConfigured, methodNotAllowed } from './_finance-server.js';
 
 const dateOnly = value => String(value || '').slice(0, 10);
+const koreaDateKey = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date());
 const daysBetween = (from, to) => Math.floor((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) + 1;
 const datesInRange = (from, to) => Array.from({ length: daysBetween(from, to) }, (_, index) => new Date(Date.parse(`${from}T00:00:00Z`) + index * 86400000).toISOString().slice(0, 10));
 const monthDays = date => new Date(Number(date.slice(0, 4)), Number(date.slice(5, 7)), 0).getDate();
@@ -23,11 +24,12 @@ export function groupFinanceSeries(series = [], periodType = 'monthly') {
   const months = new Map();
   series.forEach(day => {
     const key = day.date.slice(0, 7);
-    const row = months.get(key) || { date: key, sales: 0, orderCount: 0, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses: 0, cardFees: 0, rentExpense: 0, operatingExpenses: 0, laborCost: 0, operatingProfit: 0 };
-    for (const field of ['sales','orderCount','confirmedExpenses','provisionalCardExpenses','calculatedExpenses','cardFees','rentExpense','operatingExpenses','laborCost','operatingProfit']) row[field] += Number(day[field] || 0);
+    const row = months.get(key) || { date: key, sales: 0, orderCount: 0, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses: 0, forecastExpenses: 0, cardFees: 0, rentExpense: 0, operatingExpenses: 0, laborCost: 0, operatingProfit: 0, actualDays: 0, forecastDays: 0 };
+    for (const field of ['sales','orderCount','confirmedExpenses','provisionalCardExpenses','calculatedExpenses','forecastExpenses','cardFees','rentExpense','operatingExpenses','laborCost','operatingProfit']) row[field] += Number(day[field] || 0);
+    if (day.dataStatus === 'forecast') row.forecastDays += 1; else row.actualDays += 1;
     months.set(key, row);
   });
-  return [...months.values()];
+  return [...months.values()].map(row => ({ ...row, dataStatus: row.forecastDays && row.actualDays ? 'in_progress' : row.forecastDays ? 'forecast' : 'actual' }));
 }
 
 const changeRate = (current, previous) => previous === 0 ? (current === 0 ? 0 : null) : Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10;
@@ -57,12 +59,15 @@ export function buildDailyLaborMap({ payrollDrafts = [], payrollLines = [], atte
   return result;
 }
 
-export function buildFinanceReport({ from, to, salesRows = [], expenses = [], unreconciledCardTransactions = [], payrollDrafts = [], payrollLines = [], attendanceRecords = [], unresolvedReceipts = 0, cardFeeRate = 0, revenueRentRate = 0 }) {
+const sumFinanceRows = rows => rows.reduce((sum, day) => ({ netSales: sum.netSales + day.sales, orderCount: sum.orderCount + day.orderCount, confirmedExpenses: sum.confirmedExpenses + day.confirmedExpenses, provisionalCardExpenses: sum.provisionalCardExpenses + day.provisionalCardExpenses, calculatedExpenses: sum.calculatedExpenses + day.calculatedExpenses, forecastExpenses: sum.forecastExpenses + day.forecastExpenses, kitchenPurchases: sum.kitchenPurchases + day.kitchenPurchases, hallPurchases: sum.hallPurchases + day.hallPurchases, otherExpenses: sum.otherExpenses + day.otherExpenses, cardFees: sum.cardFees + day.cardFees, rentExpense: sum.rentExpense + day.rentExpense, operatingExpenses: sum.operatingExpenses + day.operatingExpenses, laborCost: sum.laborCost + day.laborCost, operatingProfit: sum.operatingProfit + day.operatingProfit }), { netSales: 0, orderCount: 0, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses: 0, forecastExpenses: 0, kitchenPurchases: 0, hallPurchases: 0, otherExpenses: 0, cardFees: 0, rentExpense: 0, operatingExpenses: 0, laborCost: 0, operatingProfit: 0 });
+const withFinanceRates = totals => ({ ...totals, averageOrderValue: totals.orderCount ? Math.round(totals.netSales / totals.orderCount) : null, kitchenCostRate: totals.netSales ? Math.round(totals.kitchenPurchases / totals.netSales * 1000) / 10 : null, hallCostRate: totals.netSales ? Math.round(totals.hallPurchases / totals.netSales * 1000) / 10 : null, laborCostRate: totals.netSales ? Math.round(totals.laborCost / totals.netSales * 1000) / 10 : null, profitMargin: totals.netSales ? Math.round((totals.operatingProfit / totals.netSales) * 1000) / 10 : null });
+
+export function buildFinanceReport({ from, to, salesRows = [], expenses = [], unreconciledCardTransactions = [], payrollDrafts = [], payrollLines = [], attendanceRecords = [], unresolvedReceipts = 0, cardFeeRate = 0, revenueRentRate = 0, asOfDate = koreaDateKey() }) {
   const days = datesInRange(from, to); const lineByDraft = new Map();
   payrollLines.forEach(line => lineByDraft.set(line.payroll_draft_id, (lineByDraft.get(line.payroll_draft_id) || 0) + Number(line.estimated_total || 0)));
   const payrollByMonth = new Map(payrollDrafts.map(draft => [dateOnly(draft.settlement_month).slice(0, 7), lineByDraft.get(draft.id) || 0]));
   const dailyLabor = buildDailyLaborMap({ payrollDrafts, payrollLines, attendanceRecords });
-  const series = days.map(date => {
+  const actualSeries = days.map(date => {
     const daySales = salesRows.filter(row => dateOnly(row.sales_date) === date); const dayExpenses = expenses.filter(item => dateOnly(item.transaction_date) === date);
     const dayUnreconciledCards = unreconciledCardTransactions.filter(item => dateOnly(item.approved_at) === date);
     const sales = daySales.reduce((sum, row) => sum + Number(row.completed_amount || 0), 0); const orderCount = daySales.reduce((sum, row) => sum + Number(row.completed_order_count || 0), 0);
@@ -75,11 +80,29 @@ export function buildFinanceReport({ from, to, salesRows = [], expenses = [], un
     const calculatedExpenses = cardFees + rentExpense; const operatingExpenses = confirmedExpenses + provisionalCardExpenses + calculatedExpenses;
     const month = date.slice(0, 7); const monthlyLabor = payrollByMonth.get(month) || 0;
     const laborCost = dailyLabor.has(date) ? dailyLabor.get(date) : Math.round(monthlyLabor / monthDays(date));
-    return { date, sales, orderCount, averageOrderValue: orderCount ? Math.round(sales / orderCount) : null, confirmedExpenses, provisionalCardExpenses, calculatedExpenses, kitchenPurchases, hallPurchases, otherExpenses, cardFees, rentExpense, operatingExpenses, laborCost, operatingProfit: sales - operatingExpenses - laborCost };
+    return { date, dataStatus: date === asOfDate ? 'in_progress' : 'actual', sales, orderCount, averageOrderValue: orderCount ? Math.round(sales / orderCount) : null, confirmedExpenses, provisionalCardExpenses, calculatedExpenses, forecastExpenses: 0, kitchenPurchases, hallPurchases, otherExpenses, cardFees, rentExpense, operatingExpenses, laborCost, operatingProfit: sales - operatingExpenses - laborCost };
   });
-  const totals = series.reduce((sum, day) => ({ netSales: sum.netSales + day.sales, orderCount: sum.orderCount + day.orderCount, confirmedExpenses: sum.confirmedExpenses + day.confirmedExpenses, provisionalCardExpenses: sum.provisionalCardExpenses + day.provisionalCardExpenses, calculatedExpenses: sum.calculatedExpenses + day.calculatedExpenses, kitchenPurchases: sum.kitchenPurchases + day.kitchenPurchases, hallPurchases: sum.hallPurchases + day.hallPurchases, otherExpenses: sum.otherExpenses + day.otherExpenses, cardFees: sum.cardFees + day.cardFees, rentExpense: sum.rentExpense + day.rentExpense, operatingExpenses: sum.operatingExpenses + day.operatingExpenses, laborCost: sum.laborCost + day.laborCost, operatingProfit: sum.operatingProfit + day.operatingProfit }), { netSales: 0, orderCount: 0, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses: 0, kitchenPurchases: 0, hallPurchases: 0, otherExpenses: 0, cardFees: 0, rentExpense: 0, operatingExpenses: 0, laborCost: 0, operatingProfit: 0 });
+  const baseline = actualSeries.filter(day => day.date < asOfDate && day.sales > 0);
+  const baselineSales = baseline.reduce((sum, day) => sum + day.sales, 0);
+  const variableExpenseRate = baselineSales ? Math.min(1, baseline.reduce((sum, day) => sum + day.confirmedExpenses + day.provisionalCardExpenses, 0) / baselineSales) : 0;
+  const averageFor = (date, field) => {
+    const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+    const matching = baseline.filter(day => new Date(`${day.date}T00:00:00Z`).getUTCDay() === weekday);
+    const source = matching.length ? matching : baseline;
+    return source.length ? Math.round(source.reduce((sum, day) => sum + Number(day[field] || 0), 0) / source.length) : 0;
+  };
+  const series = actualSeries.map(day => {
+    if (day.date <= asOfDate) return day;
+    const sales = averageFor(day.date, 'sales'); const orderCount = averageFor(day.date, 'orderCount');
+    const forecastExpenses = Math.round(sales * variableExpenseRate);
+    const cardFees = Math.round(sales * Number(cardFeeRate || 0)); const rentExpense = Math.round(sales * Number(revenueRentRate || 0));
+    const calculatedExpenses = cardFees + rentExpense; const operatingExpenses = forecastExpenses + calculatedExpenses;
+    return { ...day, dataStatus: 'forecast', sales, orderCount, averageOrderValue: orderCount ? Math.round(sales / orderCount) : null, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses, forecastExpenses, kitchenPurchases: 0, hallPurchases: 0, otherExpenses: 0, cardFees, rentExpense, operatingExpenses, operatingProfit: sales - operatingExpenses - day.laborCost };
+  });
+  const actualRows = series.filter(day => day.dataStatus !== 'forecast'); const forecastRows = series.filter(day => day.dataStatus === 'forecast');
+  const totals = sumFinanceRows(series); const actualTotals = sumFinanceRows(actualRows); const forecastTotals = sumFinanceRows(forecastRows);
   const missingPayrollMonths = [...new Set(days.map(date => date.slice(0, 7)).filter(month => !payrollByMonth.has(month)))];
-  return { from, to, totals: { ...totals, averageOrderValue: totals.orderCount ? Math.round(totals.netSales / totals.orderCount) : null, kitchenCostRate: totals.netSales ? Math.round(totals.kitchenPurchases / totals.netSales * 1000) / 10 : null, hallCostRate: totals.netSales ? Math.round(totals.hallPurchases / totals.netSales * 1000) / 10 : null, laborCostRate: totals.netSales ? Math.round(totals.laborCost / totals.netSales * 1000) / 10 : null, profitMargin: totals.netSales ? Math.round((totals.operatingProfit / totals.netSales) * 1000) / 10 : null }, assumptions: { cardFeeRate: Number(cardFeeRate || 0), revenueRentRate: Number(revenueRentRate || 0) }, series, completeness: { payrollComplete: missingPayrollMonths.length === 0, missingPayrollMonths, reviewComplete: Number(unresolvedReceipts) === 0, unresolvedReceipts: Number(unresolvedReceipts), laborBasis: dailyLabor.basis } };
+  return { from, to, asOfDate, hasForecast: forecastRows.length > 0, totals: withFinanceRates(totals), actualTotals: withFinanceRates(actualTotals), forecastTotals: withFinanceRates(forecastTotals), forecast: { method: 'weekday_run_rate', baselineDays: baseline.length, variableExpenseRate: Math.round(variableExpenseRate * 1000) / 10 }, assumptions: { cardFeeRate: Number(cardFeeRate || 0), revenueRentRate: Number(revenueRentRate || 0) }, series, completeness: { payrollComplete: missingPayrollMonths.length === 0, missingPayrollMonths, reviewComplete: Number(unresolvedReceipts) === 0, unresolvedReceipts: Number(unresolvedReceipts), laborBasis: dailyLabor.basis } };
 }
 
 export function compareFinanceReports(current, previous) {
@@ -153,14 +176,15 @@ export default async function handler(req, res) {
     if (req.method === 'GET') return res.status(200).json({ ok: true, report });
     const existing = await financeRest(`timefit_user_closeouts?organization_id=eq.${encodeURIComponent(organizationId)}&period_type=eq.${periodType}&period_start=eq.${from}&period_end=eq.${to}&select=version&order=version.desc&limit=1`);
     const version = Number(existing[0]?.version || 0) + 1; const now = new Date().toISOString();
-    const rows = await financeRest('timefit_user_closeouts', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify([{ organization_id: organizationId, period_type: periodType, period_start: from, period_end: to, version, status: report.completeness.closeoutReady ? 'ready' : 'draft', source_cutoff_at: now, net_sales: report.totals.netSales, operating_expenses: report.totals.operatingExpenses, labor_cost: report.totals.laborCost, operating_profit: report.totals.operatingProfit, summary: report.completeness }]) });
+    const closeoutTotals = report.hasForecast ? report.actualTotals : report.totals;
+    const rows = await financeRest('timefit_user_closeouts', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify([{ organization_id: organizationId, period_type: periodType, period_start: from, period_end: to, version, status: report.completeness.closeoutReady && !report.hasForecast ? 'ready' : 'draft', source_cutoff_at: now, net_sales: closeoutTotals.netSales, operating_expenses: closeoutTotals.operatingExpenses, labor_cost: closeoutTotals.laborCost, operating_profit: closeoutTotals.operatingProfit, summary: { ...report.completeness, hasForecast: report.hasForecast, projection: report.hasForecast ? report.totals : null } }]) });
     const closeout = rows[0];
     const lines = [
-      { line_type: 'net_sales', amount: report.totals.netSales }, { line_type: 'operating_expenses', amount: report.totals.operatingExpenses },
-      { line_type: 'confirmed_expenses', amount: report.totals.confirmedExpenses }, { line_type: 'kitchen_purchases', amount: report.totals.kitchenPurchases },
-      { line_type: 'provisional_card_expenses', amount: report.totals.provisionalCardExpenses },
-      { line_type: 'hall_purchases', amount: report.totals.hallPurchases }, { line_type: 'card_fees', amount: report.totals.cardFees },
-      { line_type: 'revenue_rent', amount: report.totals.rentExpense }, { line_type: 'labor_cost', amount: report.totals.laborCost }, { line_type: 'operating_profit', amount: report.totals.operatingProfit },
+      { line_type: 'net_sales', amount: closeoutTotals.netSales }, { line_type: 'operating_expenses', amount: closeoutTotals.operatingExpenses },
+      { line_type: 'confirmed_expenses', amount: closeoutTotals.confirmedExpenses }, { line_type: 'kitchen_purchases', amount: closeoutTotals.kitchenPurchases },
+      { line_type: 'provisional_card_expenses', amount: closeoutTotals.provisionalCardExpenses },
+      { line_type: 'hall_purchases', amount: closeoutTotals.hallPurchases }, { line_type: 'card_fees', amount: closeoutTotals.cardFees },
+      { line_type: 'revenue_rent', amount: closeoutTotals.rentExpense }, { line_type: 'labor_cost', amount: closeoutTotals.laborCost }, { line_type: 'operating_profit', amount: closeoutTotals.operatingProfit },
     ].map(line => ({ organization_id: organizationId, closeout_id: closeout.id, ...line, count: 0, metadata: { from, to } }));
     await financeRest('timefit_user_closeout_lines', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(lines) });
     return res.status(201).json({ ok: true, closeout, report });
