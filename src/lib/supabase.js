@@ -467,8 +467,8 @@ export async function processReceiptDocument({ organizationId, documentId }) {
   const payload = await cardConnectionRequest('receipt-process', { method: 'POST', body: { organizationId, documentId } });
   return payload;
 }
-export async function loadExpenseReviewQueue(organizationId, status = 'attention') {
-  const payload = await cardConnectionRequest('expense-review', { query: { organizationId, status } });
+export async function loadExpenseReviewQueue(organizationId, status = 'attention', range = {}) {
+  const payload = await cardConnectionRequest('expense-review', { query: { organizationId, status, ...range } });
   return payload.documents || [];
 }
 export async function reviewExpenseMatch({ organizationId, matchId, action }) {

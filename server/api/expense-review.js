@@ -30,7 +30,10 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       const requestedStatus = req.query?.status;
       const statusFilter = requestedStatus === 'attention' ? 'processing_status=in.(review_required,failed)' : `processing_status=eq.${encodeURIComponent(['review_required','matched','failed'].includes(requestedStatus) ? requestedStatus : 'review_required')}`;
-      const documents = await financeRest(`timefit_user_finance_documents?organization_id=eq.${encodeURIComponent(organizationId)}&document_type=eq.receipt&${statusFilter}&select=id,title,file_name,storage_path,mime_type,document_date,processing_status,extracted_data,processing_error,processed_at,created_at&order=created_at.desc&limit=100`);
+      const dateFilters = [];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(req.query?.from || '')) dateFilters.push(`document_date=gte.${req.query.from}`);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(req.query?.to || '')) dateFilters.push(`document_date=lte.${req.query.to}`);
+      const documents = await financeRest(`timefit_user_finance_documents?organization_id=eq.${encodeURIComponent(organizationId)}&document_type=eq.receipt&${statusFilter}${dateFilters.length ? `&${dateFilters.join('&')}` : ''}&select=id,title,file_name,storage_path,mime_type,document_date,processing_status,extracted_data,processing_error,processed_at,created_at&order=document_date.desc,created_at.desc&limit=500`);
       const documentIds = documents.map(item => item.id);
       const matches = documentIds.length ? await financeRest(`timefit_user_expense_matches?organization_id=eq.${encodeURIComponent(organizationId)}&document_id=in.(${documentIds.map(encodeURIComponent).join(',')})&select=*,expense:timefit_user_expenses(*),transaction:timefit_user_card_transaction_groups(*,card:timefit_user_corporate_cards(issuer,nickname,last4))&order=score.desc`) : [];
       const sources = documentIds.length ? await financeRest(`timefit_user_expense_sources?organization_id=eq.${encodeURIComponent(organizationId)}&source_type=eq.receipt&source_id=in.(${documentIds.map(encodeURIComponent).join(',')})&select=source_id,expense:timefit_user_expenses(*)`) : [];

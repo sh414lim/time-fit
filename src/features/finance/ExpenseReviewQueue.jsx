@@ -12,6 +12,8 @@ import {
 const money = value => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW', maximumFractionDigits: 0 }).format(Number(value) || 0);
 
 export default function ExpenseReviewQueue({ organizationId }) {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
+  const [from, setFrom] = useState(`${today.slice(0, 7)}-01`); const [to, setTo] = useState(today);
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
@@ -22,11 +24,11 @@ export default function ExpenseReviewQueue({ organizationId }) {
   const refresh = async () => {
     if (!organizationId) return;
     setLoading(true);
-    try { const next = await loadExpenseReviewQueue(organizationId); setDocuments(next); const available = new Set(next.map(item => item.matches?.[0]).filter(match => match?.status === 'suggested' && Number(match.score) >= 95).map(match => match.id)); setSelectedIds(ids => ids.filter(id => available.has(id))); }
+    try { const next = await loadExpenseReviewQueue(organizationId, 'attention', { from, to }); setDocuments(next); const available = new Set(next.map(item => item.matches?.[0]).filter(match => match?.status === 'suggested' && Number(match.score) >= 95).map(match => match.id)); setSelectedIds(ids => ids.filter(id => available.has(id))); }
     catch (error) { setMessage(error.message || '확인 필요 영수증을 불러오지 못했습니다.'); }
     finally { setLoading(false); }
   };
-  useEffect(() => { refresh(); }, [organizationId]);
+  useEffect(() => { refresh(); }, [organizationId, from, to]);
 
   const review = async (document, match, action) => {
     if (action === 'confirm' && !window.confirm(`${match.transaction?.merchant_name || '카드 거래'}와 영수증을 한 지출로 확정할까요?`)) return;
@@ -79,6 +81,7 @@ export default function ExpenseReviewQueue({ organizationId }) {
 
   return <section className="card full-card expense-review-queue">
     <div className="card-title"><div><h2>확인 필요 영수증</h2><p>OCR 결과와 카드 후보를 비교해 예외만 처리하세요. 확정하면 하나의 지출로 합쳐집니다.</p></div><span className="count">{documents.length}</span></div>
+    <div className="period-query-controls"><label>시작일<input aria-label="증빙 시작일" type="date" value={from} onChange={event => setFrom(event.target.value)}/></label><label>종료일<input aria-label="증빙 종료일" type="date" min={from} value={to} onChange={event => setTo(event.target.value)}/></label><span>{from} ~ {to}</span></div>
     {documents.some(item => Number(item.matches?.[0]?.score) >= 95) && <div className="expense-bulk-review"><label><input type="checkbox" checked={selectedIds.length > 0 && selectedIds.length === documents.filter(item => item.matches?.[0]?.status === 'suggested' && Number(item.matches?.[0]?.score) >= 95).length} onChange={event => setSelectedIds(event.target.checked ? documents.map(item => item.matches?.[0]).filter(match => match?.status === 'suggested' && Number(match.score) >= 95).map(match => match.id) : [])}/><span>95점 이상 최상위 후보 전체 선택</span></label><button className="submit" disabled={!selectedIds.length || Boolean(busyId)} onClick={bulkConfirm}>{busyId === 'bulk' ? '확정 중…' : `${selectedIds.length}건 일괄 확정`}</button></div>}
     {message && <div className={/못|이미|오류/.test(message) ? 'connection-error' : 'expense-review-success'}><span>{message}</span><button onClick={() => setMessage('')}>닫기</button></div>}
     {loading ? <div className="empty-inline">영수증 검토함을 불러오는 중…</div> : documents.length ? documents.map(document => {

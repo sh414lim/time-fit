@@ -23,8 +23,8 @@ export function groupFinanceSeries(series = [], periodType = 'monthly') {
   const months = new Map();
   series.forEach(day => {
     const key = day.date.slice(0, 7);
-    const row = months.get(key) || { date: key, sales: 0, operatingExpenses: 0, laborCost: 0, operatingProfit: 0 };
-    for (const field of ['sales','operatingExpenses','laborCost','operatingProfit']) row[field] += Number(day[field] || 0);
+    const row = months.get(key) || { date: key, sales: 0, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses: 0, operatingExpenses: 0, laborCost: 0, operatingProfit: 0 };
+    for (const field of ['sales','confirmedExpenses','provisionalCardExpenses','calculatedExpenses','operatingExpenses','laborCost','operatingProfit']) row[field] += Number(day[field] || 0);
     months.set(key, row);
   });
   return [...months.values()];
@@ -70,13 +70,14 @@ export function buildFinanceReport({ from, to, salesRows = [], expenses = [], un
     const kitchenPurchases = dayExpenses.filter(item => /주방|식자재|재료/.test(String(item.category || ''))).reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
     const hallPurchases = dayExpenses.filter(item => /홀|음료|주류/.test(String(item.category || ''))).reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
     const provisionalCardExpenses = dayUnreconciledCards.reduce((sum, item) => sum + Number(item.net_amount || 0), 0);
-    const otherExpenses = confirmedExpenses - kitchenPurchases - hallPurchases + provisionalCardExpenses;
-    const cardFees = Math.round(sales * Number(cardFeeRate || 0)); const rentExpense = Math.round(sales * Number(revenueRentRate || 0)); const operatingExpenses = confirmedExpenses + provisionalCardExpenses + cardFees + rentExpense;
+    const otherExpenses = confirmedExpenses - kitchenPurchases - hallPurchases;
+    const cardFees = Math.round(sales * Number(cardFeeRate || 0)); const rentExpense = Math.round(sales * Number(revenueRentRate || 0));
+    const calculatedExpenses = cardFees + rentExpense; const operatingExpenses = confirmedExpenses + provisionalCardExpenses + calculatedExpenses;
     const month = date.slice(0, 7); const monthlyLabor = payrollByMonth.get(month) || 0;
     const laborCost = dailyLabor.has(date) ? dailyLabor.get(date) : Math.round(monthlyLabor / monthDays(date));
-    return { date, sales, orderCount, averageOrderValue: orderCount ? Math.round(sales / orderCount) : null, confirmedExpenses, provisionalCardExpenses, kitchenPurchases, hallPurchases, otherExpenses, cardFees, rentExpense, operatingExpenses, laborCost, operatingProfit: sales - operatingExpenses - laborCost };
+    return { date, sales, orderCount, averageOrderValue: orderCount ? Math.round(sales / orderCount) : null, confirmedExpenses, provisionalCardExpenses, calculatedExpenses, kitchenPurchases, hallPurchases, otherExpenses, cardFees, rentExpense, operatingExpenses, laborCost, operatingProfit: sales - operatingExpenses - laborCost };
   });
-  const totals = series.reduce((sum, day) => ({ netSales: sum.netSales + day.sales, orderCount: sum.orderCount + day.orderCount, confirmedExpenses: sum.confirmedExpenses + day.confirmedExpenses, provisionalCardExpenses: sum.provisionalCardExpenses + day.provisionalCardExpenses, kitchenPurchases: sum.kitchenPurchases + day.kitchenPurchases, hallPurchases: sum.hallPurchases + day.hallPurchases, otherExpenses: sum.otherExpenses + day.otherExpenses, cardFees: sum.cardFees + day.cardFees, rentExpense: sum.rentExpense + day.rentExpense, operatingExpenses: sum.operatingExpenses + day.operatingExpenses, laborCost: sum.laborCost + day.laborCost, operatingProfit: sum.operatingProfit + day.operatingProfit }), { netSales: 0, orderCount: 0, confirmedExpenses: 0, provisionalCardExpenses: 0, kitchenPurchases: 0, hallPurchases: 0, otherExpenses: 0, cardFees: 0, rentExpense: 0, operatingExpenses: 0, laborCost: 0, operatingProfit: 0 });
+  const totals = series.reduce((sum, day) => ({ netSales: sum.netSales + day.sales, orderCount: sum.orderCount + day.orderCount, confirmedExpenses: sum.confirmedExpenses + day.confirmedExpenses, provisionalCardExpenses: sum.provisionalCardExpenses + day.provisionalCardExpenses, calculatedExpenses: sum.calculatedExpenses + day.calculatedExpenses, kitchenPurchases: sum.kitchenPurchases + day.kitchenPurchases, hallPurchases: sum.hallPurchases + day.hallPurchases, otherExpenses: sum.otherExpenses + day.otherExpenses, cardFees: sum.cardFees + day.cardFees, rentExpense: sum.rentExpense + day.rentExpense, operatingExpenses: sum.operatingExpenses + day.operatingExpenses, laborCost: sum.laborCost + day.laborCost, operatingProfit: sum.operatingProfit + day.operatingProfit }), { netSales: 0, orderCount: 0, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses: 0, kitchenPurchases: 0, hallPurchases: 0, otherExpenses: 0, cardFees: 0, rentExpense: 0, operatingExpenses: 0, laborCost: 0, operatingProfit: 0 });
   const missingPayrollMonths = [...new Set(days.map(date => date.slice(0, 7)).filter(month => !payrollByMonth.has(month)))];
   return { from, to, totals: { ...totals, averageOrderValue: totals.orderCount ? Math.round(totals.netSales / totals.orderCount) : null, kitchenCostRate: totals.netSales ? Math.round(totals.kitchenPurchases / totals.netSales * 1000) / 10 : null, hallCostRate: totals.netSales ? Math.round(totals.hallPurchases / totals.netSales * 1000) / 10 : null, laborCostRate: totals.netSales ? Math.round(totals.laborCost / totals.netSales * 1000) / 10 : null, profitMargin: totals.netSales ? Math.round((totals.operatingProfit / totals.netSales) * 1000) / 10 : null }, assumptions: { cardFeeRate: Number(cardFeeRate || 0), revenueRentRate: Number(revenueRentRate || 0) }, series, completeness: { payrollComplete: missingPayrollMonths.length === 0, missingPayrollMonths, reviewComplete: Number(unresolvedReceipts) === 0, unresolvedReceipts: Number(unresolvedReceipts), laborBasis: dailyLabor.basis } };
 }
