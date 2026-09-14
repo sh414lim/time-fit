@@ -1,5 +1,4 @@
 import { authorizeFinance, financeError, financeRest, financeServerConfigured, methodNotAllowed } from './_finance-server.js';
-import { runCardSync } from './_card-sync-runner.js';
 
 export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) return methodNotAllowed(res);
@@ -30,8 +29,7 @@ export default async function handler(req, res) {
       method: 'POST', headers: { Prefer: 'return=representation' },
       body: JSON.stringify([{ organization_id: organizationId, connection_id: connectionId, sync_type: 'approvals', idempotency_key: idempotencyKey, status: 'queued', attempt_count: 0 }]),
     });
-    const result = await runCardSync({ connection, runId: runs[0].id, mode, userToken: auth.token });
-    return res.status(200).json({ ok: true, result, runId: runs[0].id });
+    return res.status(202).json({ ok: true, queued: true, run: runs[0], runId: runs[0].id });
   } catch (error) {
     return financeError(res, error, '카드 내역을 동기화하지 못했습니다.');
   }

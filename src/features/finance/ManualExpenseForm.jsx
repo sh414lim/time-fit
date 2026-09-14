@@ -2,13 +2,13 @@ import React, { useState } from 'react';
 import { createManualExpense } from '../../lib/supabase';
 import ExpenseLedgerExport from './ExpenseLedgerExport';
 
-export default function ManualExpenseForm({ organizationId, employees = [] }) {
+export default function ManualExpenseForm({ organizationId, employees = [], onSaved }) {
   const [open, setOpen] = useState(false); const [saving, setSaving] = useState(false); const [message, setMessage] = useState(''); const [duplicatePayload, setDuplicatePayload] = useState(null);
   const submit = async (event, allowDuplicate = false) => {
     event?.preventDefault();
     const payload = allowDuplicate ? duplicatePayload : (() => { const form = new FormData(event.currentTarget); return { organizationId, transactionDate: form.get('transactionDate'), merchantName: form.get('merchantName'), totalAmount: form.get('totalAmount'), supplyAmount: form.get('supplyAmount'), vatAmount: form.get('vatAmount'), category: form.get('category'), reason: form.get('reason'), staffId: form.get('staffId') || null }; })();
     setSaving(true); setMessage('');
-    try { await createManualExpense({ ...payload, allowDuplicate }); setDuplicatePayload(null); event?.currentTarget?.reset(); setMessage('직접 지출을 확정 원장에 등록했어요. 원장을 새로고침해 확인하세요.'); }
+    try { await createManualExpense({ ...payload, allowDuplicate }); setDuplicatePayload(null); event?.currentTarget?.reset(); setMessage('직접 지출을 등록하고 대시보드에 반영했어요.'); window.dispatchEvent(new CustomEvent('timefit-expense-created')); onSaved?.(); }
     catch (error) { if (/같은 날짜/.test(error.message || '')) { setDuplicatePayload(payload); setMessage('같은 날짜·사용처·금액의 지출이 이미 있습니다. 별도 지출인지 확인해 주세요.'); } else setMessage(error.message || '직접 지출을 등록하지 못했습니다.'); }
     finally { setSaving(false); }
   };

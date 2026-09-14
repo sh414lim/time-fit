@@ -26,13 +26,21 @@ export default async function handler(req, res) {
     const assets = await financeRest(`timefit_user_connection_assets?connection_id=eq.${encodeURIComponent(connectionId)}&id=in.(${assetIds.map(encodeURIComponent).join(',')})&select=*`);
     const providerCards = await provider.listCards();
     const selected = [];
+    const changedAt = new Date().toISOString();
+    await Promise.all([
+      financeRest(`timefit_user_connection_assets?connection_id=eq.${encodeURIComponent(connectionId)}&status=neq.disconnected`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'excluded', updated_at: changedAt }) }),
+      financeRest(`timefit_user_corporate_cards?connection_id=eq.${encodeURIComponent(connectionId)}&archived_at=is.null`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'paused', updated_at: changedAt }) }),
+    ]);
     for (const asset of assets) {
       const providerCard = providerCards.find(card => card.providerAssetId === asset.provider_asset_id);
       if (!providerCard) continue;
       let cards = await financeRest(`timefit_user_corporate_cards?organization_id=eq.${encodeURIComponent(organizationId)}&provider=eq.${encodeURIComponent(context.connection.provider)}&provider_card_id=eq.${encodeURIComponent(providerCard.providerAssetId)}&select=*`);
       if (!cards.length) cards = await financeRest('timefit_user_corporate_cards', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify([{ organization_id: organizationId, connection_id: connectionId, issuer: providerCard.issuer, nickname: providerCard.displayName, last4: providerCard.last4, status: 'active', provider: context.connection.provider, provider_card_id: providerCard.providerAssetId, created_by: context.auth.user.id }]) });
       const card = cards[0];
-      await financeRest(`timefit_user_connection_assets?id=eq.${encodeURIComponent(asset.id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ corporate_card_id: card.id, status: 'selected', updated_at: new Date().toISOString() }) });
+      await Promise.all([
+        financeRest(`timefit_user_connection_assets?id=eq.${encodeURIComponent(asset.id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ corporate_card_id: card.id, status: 'selected', updated_at: changedAt }) }),
+        financeRest(`timefit_user_corporate_cards?id=eq.${encodeURIComponent(card.id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'active', archived_at: null, updated_at: changedAt }) }),
+      ]);
       selected.push(card);
     }
     await financeRest(`timefit_user_card_connections?id=eq.${encodeURIComponent(connectionId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'backfilling', updated_at: new Date().toISOString() }) });

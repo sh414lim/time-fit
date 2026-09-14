@@ -9,6 +9,22 @@ const safeState = connection => ({
   next_sync_at: connection.next_sync_at,
 });
 
+const publicConnection = connection => ({
+  id: connection.id,
+  provider: connection.provider,
+  business_type: connection.business_type,
+  status: connection.status,
+  consent_version: connection.consent_version,
+  consented_at: connection.consented_at,
+  last_attempted_at: connection.last_attempted_at,
+  last_succeeded_at: connection.last_succeeded_at,
+  next_sync_at: connection.next_sync_at,
+  last_error_code: connection.last_error_code,
+  last_error_category: connection.last_error_category,
+  disconnected_at: connection.disconnected_at,
+  created_at: connection.created_at,
+});
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return methodNotAllowed(res);
   if (!financeServerConfigured()) return res.status(503).json({ ok: false, error: '금융 연결 서버 설정이 필요합니다.' });
@@ -31,7 +47,7 @@ export default async function handler(req, res) {
       method: 'POST', headers: { Prefer: 'return=minimal' },
       body: JSON.stringify([{ organization_id: organizationId, entity_type: 'card_connection', entity_id: connection.id, action: 'credentials_refreshed', before_value: safeState(connection), after_value: safeState(updated[0]), actor_id: auth.user.id, source: 'manager_web' }]),
     });
-    return res.status(200).json({ ok: true, connection: updated[0] });
+    return res.status(200).json({ ok: true, connection: publicConnection(updated[0]) });
   } catch (error) {
     if (/authentication_fields_required/.test(error.message)) return res.status(400).json({ ok: false, code: 'authentication_fields_required', error: '사업자번호, 카드사 코드와 인증 방식을 확인해 주세요.' });
     return financeError(res, error, '카드사 재인증을 완료하지 못했습니다. 입력 정보와 카드사 상태를 확인해 주세요.');

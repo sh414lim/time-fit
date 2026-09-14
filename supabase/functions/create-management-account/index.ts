@@ -2,6 +2,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const headers = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Content-Type': 'application/json' }
 const loginEmail = (loginId: string) => `${loginId.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '')}@accounts.timefit.local`
+const permissionCodes = new Set(['dashboard.view','attendance.view','schedule.view','schedule.manage','leave.view','leave.review','payroll.view','employee.view','finance.view','expense.manage','settings.manage'])
 
 Deno.serve(async request => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers })
@@ -16,9 +17,9 @@ Deno.serve(async request => {
     const password = String(body.temporaryPassword || '')
     const displayName = String(body.displayName || '').trim()
     const roleCode = String(body.roleCode || '')
-    const permissions = Array.isArray(body.permissions) ? body.permissions : []
+    const permissions = [...new Set((Array.isArray(body.permissions) ? body.permissions : []).map(String))]
     const categoryIds = Array.isArray(body.categoryIds) ? body.categoryIds : []
-    if (!organizationId || !/^[a-z0-9._-]{4,30}$/.test(loginId) || password.length < 8 || !displayName || !['manager','executive_chef'].includes(roleCode)) throw new Error('invalid_management_account_input')
+    if (!organizationId || !/^[a-z0-9._-]{4,30}$/.test(loginId) || password.length < 8 || !displayName || !['manager','executive_chef'].includes(roleCode) || permissions.some(code => !permissionCodes.has(code))) throw new Error('invalid_management_account_input')
     const { data: organization } = await admin.from('timefit_user_organizations').select('owner_id').eq('id', organizationId).maybeSingle()
     const { data: managerMembership } = await admin.from('timefit_user_memberships').select('role').eq('organization_id', organizationId).eq('user_id', caller.user.id).maybeSingle()
     const { data: delegatedAccount } = await admin.from('timefit_user_management_accounts').select('id').eq('organization_id', organizationId).eq('user_id', caller.user.id).maybeSingle()

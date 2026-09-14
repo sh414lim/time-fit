@@ -20,7 +20,7 @@ const authorized = req => {
 const reminderMessage = transaction => {
   const merchant = transaction.merchant_name || '사용처 미확인';
   const amount = Number(transaction.net_amount || 0).toLocaleString('ko-KR');
-  const card = transaction.card?.nickname || transaction.card?.issuer || '법인카드';
+  const card = String(transaction.card?.nickname || transaction.card?.issuer || '법인카드').replace(/^그랜터/, '결제내역');
   return `${merchant} ${amount}원 (${card} •••• ${transaction.card?.last4 || '----'}) 영수증을 촬영해 등록해 주세요.`;
 };
 

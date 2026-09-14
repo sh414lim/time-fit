@@ -16,13 +16,6 @@
 .payroll-row-amount { display: grid; justify-items: end; gap: 3px; }
 .payroll-row-amount small { color: #2f80ed; font-size: 12px; white-space: nowrap; }
 
-/* Break-time handling is temporarily outside the MVP schedule scope. The API
-   also persists zero minutes, so this is presentation rather than enforcement. */
-.schedule-registration label:has(input[type="number"][max="480"]),
-.schedule-edit-form label:has(input[type="number"][max="480"]) {
-  display: none;
-}
-
 /* Employee detail attendance: show both timestamps, including on mobile. */
 .detail-attendance {
   grid-template-columns: 1fr 1.5fr auto 1fr;

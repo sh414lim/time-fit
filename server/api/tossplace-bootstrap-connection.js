@@ -16,7 +16,7 @@ export default async function handler(req, res) {
     const membershipResponse = await fetch(`${process.env.SUPABASE_URL}/rest/v1/timefit_user_memberships?organization_id=eq.${encodeURIComponent(organizationId)}&user_id=eq.${encodeURIComponent(user.id)}&role=eq.manager&select=organization_id`, { headers: serverHeaders() });
     const memberships = membershipResponse.ok ? await membershipResponse.json() : [];
     if (!memberships.length) return res.status(403).json({ ok: false, error: 'Manager permission required' });
-    const payload = { organization_id: organizationId, display_name: String(displayName || 'Toss Place').trim(), service_id: String(serviceId).trim(), service_code: String(serviceCode).trim().toUpperCase(), merchant_id: Number(process.env.TOSSPLACE_MERCHANT_ID), sync_enabled: true, connection_status: 'connected', last_error: null };
+    const payload = { organization_id: organizationId, display_name: String(displayName || 'Toss Place').trim(), service_id: String(serviceId).trim(), service_code: String(serviceCode).trim().toUpperCase(), merchant_id: Number(process.env.TOSSPLACE_MERCHANT_ID), sync_enabled: true, connection_status: 'connected', credential_source: 'platform', encrypted_access_key: null, encrypted_access_secret: null, last_error: null };
     const saveResponse = await fetch(`${process.env.SUPABASE_URL}/rest/v1/timefit_user_tossplace_connections?on_conflict=organization_id`, { method: 'POST', headers: { ...serverHeaders(), Prefer: 'resolution=merge-duplicates,return=representation' }, body: JSON.stringify([payload]) });
     if (!saveResponse.ok) throw new Error(`connection_save_${saveResponse.status}`);
     return res.status(200).json({ ok: true, connection: await saveResponse.json() });

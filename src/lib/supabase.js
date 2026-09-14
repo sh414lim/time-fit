@@ -128,16 +128,17 @@ export async function loadWorkforce(organizationId) {
   const context = await getAuthContext();
   const canViewPayroll = Boolean(context.isOrganizationOwner || context.managementAccount?.permissions?.includes('payroll.view'));
   const staffColumns = `id,user_id,display_name,department,category_id,job_title,joined_on,phone_e164,avatar_path,sort_order${canViewPayroll ? ',pay_type,hourly_wage,daily_wage,monthly_salary,annual_salary' : ''}`;
-  const [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult] = await requestWithTimeout(Promise.all([
+  const [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult, staffOrderResult] = await requestWithTimeout(Promise.all([
     client.from('timefit_user_staff').select(staffColumns).eq('organization_id', organizationId).order('sort_order').order('created_at'),
-    client.from('timefit_user_work_schedules').select('id,staff_id,work_date,starts_at,ends_at,break_minutes,break_starts_at,break_ends_at,shift_name,is_day_off,status,approval_status,submitted_by,submitted_at,reviewed_by,reviewed_at,review_comment').eq('organization_id', organizationId).order('work_date'),
+    client.from('timefit_user_work_schedules').select('id,staff_id,work_date,starts_at,ends_at,break_minutes,break_paid,break_starts_at,break_ends_at,shift_name,is_day_off,status,approval_status,submitted_by,submitted_at,reviewed_by,reviewed_at,review_comment').eq('organization_id', organizationId).order('work_date'),
     client.from('timefit_user_leave_requests').select('id,staff_id,starts_on,ends_on,leave_type,amount,reason,status,review_comment,created_at').eq('organization_id', organizationId).order('created_at', { ascending: false }),
     client.from('timefit_user_attendance_records').select('id,staff_id,work_date,checked_in_at,checked_out_at,source').eq('organization_id', organizationId).order('work_date', { ascending: false }),
     client.from('timefit_user_organization_settings').select('*').eq('organization_id', organizationId).maybeSingle(),
     client.from('timefit_user_leave_grants').select('id,staff_id,amount,reason,grant_type,attendance_record_id,granted_at,created_at').eq('organization_id', organizationId).order('granted_at', { ascending: false }),
     client.from('timefit_user_staff_categories').select('id,name,color,sort_order').eq('organization_id', organizationId).order('sort_order').order('name'),
+    client.from('timefit_user_staff_order_preferences').select('staff_id,sort_order').eq('organization_id', organizationId),
   ]), 'workforce_load');
-  for (const result of [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult]) if (result.error) throw result.error;
+  for (const result of [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult, staffOrderResult]) if (result.error) throw result.error;
   const userIds = (staffResult.data ?? []).map(item => item.user_id).filter(Boolean);
   const accountsResult = userIds.length
     ? await requestWithTimeout(client.from('timefit_user_accounts').select('id,display_name').in('id', userIds), 'workforce_accounts')
@@ -146,7 +147,12 @@ export async function loadWorkforce(organizationId) {
   const accounts = Object.fromEntries((accountsResult.data ?? []).map(item => [item.id, item]));
   const categories = categoriesResult.data ?? [];
   const categoryById = Object.fromEntries(categories.map(item => [item.id, item]));
-  const staffRows = staffResult.data ?? [];
+  const personalOrder = new Map((staffOrderResult.data ?? []).map(item => [item.staff_id, Number(item.sort_order)]));
+  const staffRows = [...(staffResult.data ?? [])].sort((a, b) => {
+    const aHasOrder = personalOrder.has(a.id); const bHasOrder = personalOrder.has(b.id);
+    if (aHasOrder !== bHasOrder) return aHasOrder ? -1 : 1;
+    return (personalOrder.get(a.id) ?? Number(a.sort_order) ?? 0) - (personalOrder.get(b.id) ?? Number(b.sort_order) ?? 0);
+  }).map((item, index) => ({ ...item, sort_order: index }));
   const avatarPaths = staffRows.map(item => item.avatar_path).filter(Boolean);
   const signedAvatarUrls = avatarPaths.length
     ? await client.storage.from('timefit-staff-avatars').createSignedUrls(avatarPaths, 60 * 60)
@@ -176,27 +182,37 @@ export async function deleteStaffCategory(id) {
   if (error) throw error;
 }
 
-export async function saveStaffOrder(staffIds) {
-  const results = await Promise.all(staffIds.map((id, index) => requireClient().from('timefit_user_staff').update({ sort_order: index }).eq('id', id)));
-  const failed = results.find(result => result.error);
-  if (failed) throw failed.error;
+export async function saveStaffOrder(organizationId, staffIds) {
+  const { data, error } = await requireClient().rpc('timefit_user_reorder_staff', { p_organization_id: organizationId, p_staff_ids: staffIds });
+  if (error) throw error;
+  if (Number(data) !== staffIds.length) throw new Error('직원 순서를 모두 저장하지 못했습니다.');
+  return data;
 }
 
-export async function saveWorkSchedule({ organizationId, staffId, workDate, startsAt, endsAt, shiftName, breakMinutes = 0, breakStartsAt = null, breakEndsAt = null }) {
+export async function correctAttendanceRecord({ organizationId, staffId, workDate, checkedInAt, checkedOutAt, reason }) {
+  const { data, error } = await requireClient().rpc('timefit_user_correct_attendance', {
+    p_organization_id: organizationId, p_staff_id: staffId, p_work_date: workDate,
+    p_checked_in_at: checkedInAt || null, p_checked_out_at: checkedOutAt || null, p_reason: String(reason || '').trim(),
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function saveWorkSchedule({ organizationId, staffId, workDate, startsAt, endsAt, shiftName, breakMinutes = 0, breakPaid = false, breakStartsAt = null, breakEndsAt = null }) {
   const client = requireClient();
   const isDayOff = !startsAt || !endsAt;
-  const { data, error } = await client.from('timefit_user_work_schedules').upsert({ organization_id: organizationId, staff_id: staffId, work_date: workDate, starts_at: isDayOff ? null : startsAt, ends_at: isDayOff ? null : endsAt, break_minutes: isDayOff ? 0 : Number(breakMinutes) || 0, break_starts_at: isDayOff ? null : breakStartsAt || null, break_ends_at: isDayOff ? null : breakEndsAt || null, shift_name: shiftName || (isDayOff ? '휴무' : '일반 근무'), is_day_off: isDayOff, created_by: (await client.auth.getUser()).data.user?.id }, { onConflict: 'staff_id,work_date' }).select().single();
+  const { data, error } = await client.from('timefit_user_work_schedules').upsert({ organization_id: organizationId, staff_id: staffId, work_date: workDate, starts_at: isDayOff ? null : startsAt, ends_at: isDayOff ? null : endsAt, break_minutes: isDayOff ? 0 : Number(breakMinutes) || 0, break_paid: isDayOff ? false : Boolean(breakPaid), break_starts_at: isDayOff ? null : breakStartsAt || null, break_ends_at: isDayOff ? null : breakEndsAt || null, shift_name: shiftName || (isDayOff ? '휴무' : '일반 근무'), is_day_off: isDayOff, created_by: (await client.auth.getUser()).data.user?.id }, { onConflict: 'staff_id,work_date' }).select().single();
   if (error) throw error; return data;
 }
 
-export async function saveWorkSchedulesBulk({ organizationId, staffIds, workDates, startsAt, endsAt, shiftName, breakMinutes = 0, breakStartsAt = null, breakEndsAt = null }) {
+export async function saveWorkSchedulesBulk({ organizationId, staffIds, workDates, startsAt, endsAt, shiftName, breakMinutes = 0, breakPaid = false, breakStartsAt = null, breakEndsAt = null }) {
   const client = requireClient();
   const userId = (await client.auth.getUser()).data.user?.id;
   const isDayOff = !startsAt || !endsAt;
   const rows = staffIds.flatMap(staffId => workDates.map(workDate => ({
     organization_id: organizationId, staff_id: staffId, work_date: workDate,
     starts_at: isDayOff ? null : startsAt, ends_at: isDayOff ? null : endsAt,
-    break_minutes: isDayOff ? 0 : Number(breakMinutes) || 0, break_starts_at: isDayOff ? null : breakStartsAt || null, break_ends_at: isDayOff ? null : breakEndsAt || null, shift_name: shiftName || (isDayOff ? '휴무' : '일반 근무'),
+    break_minutes: isDayOff ? 0 : Number(breakMinutes) || 0, break_paid: isDayOff ? false : Boolean(breakPaid), break_starts_at: isDayOff ? null : breakStartsAt || null, break_ends_at: isDayOff ? null : breakEndsAt || null, shift_name: shiftName || (isDayOff ? '휴무' : '일반 근무'),
     is_day_off: isDayOff, created_by: userId,
   })));
   if (!rows.length) throw new Error('bulk_schedule_selection_required');
@@ -206,8 +222,10 @@ export async function saveWorkSchedulesBulk({ organizationId, staffIds, workDate
 }
 
 export async function deleteWorkSchedule(scheduleId) {
-  const { error } = await requireClient().from('timefit_user_work_schedules').delete().eq('id', scheduleId);
+  const { data, error } = await requireClient().from('timefit_user_work_schedules').delete().eq('id', scheduleId).select('id').maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error('취소할 근무 일정을 찾지 못했거나 삭제 권한이 없습니다.');
+  return data;
 }
 
 export async function reviewWorkSchedule({ scheduleId, decision, comment = '' }) {
@@ -326,10 +344,10 @@ export async function loadOrganizationSalesDashboard(organizationId, filters = {
   rememberSalesDashboard(cacheKey, { data: body, cachedAt: Date.now() });
   return body;
 }
-export async function syncOrganizationSales(organizationId) {
+export async function syncOrganizationSales(organizationId, options = {}) {
   const client = requireClient(); const { data: { session } } = await client.auth.getSession();
   if (!session?.access_token) throw new Error('로그인이 필요합니다.');
-  const response = await fetch('/api/sync-sales', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` }, body: JSON.stringify({ organizationId }) });
+  const response = await fetch('/api/sync-sales', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` }, body: JSON.stringify({ organizationId, ...options }) });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || '매출 동기화를 완료하지 못했습니다.');
   return body;
@@ -361,11 +379,13 @@ export async function savePayrollContract(contract) {
 }
 export async function savePayrollDraft({ organizationId, settlementMonth, status = 'draft', lines }) {
   const client = requireClient(); const userId = (await client.auth.getUser()).data.user?.id; const month = `${settlementMonth}-01`;
+  const integerMinuteFields = ['scheduled_minutes', 'worked_minutes'];
+  const normalizedLines = lines.map(line => Object.fromEntries(Object.entries(line).map(([key, value]) => [key, integerMinuteFields.includes(key) ? Math.max(0, Math.round(Number(value) || 0)) : value])));
   const { data: draft, error: draftError } = await client.from('timefit_user_payroll_drafts').upsert({ organization_id: organizationId, settlement_month: month, status, updated_by: userId, created_by: userId, updated_at: new Date().toISOString() }, { onConflict: 'organization_id,settlement_month' }).select().single();
   if (draftError) throw draftError;
   const { error: deleteError } = await client.from('timefit_user_payroll_draft_lines').delete().eq('payroll_draft_id', draft.id);
   if (deleteError) throw deleteError;
-  if (lines.length) { const { error: linesError } = await client.from('timefit_user_payroll_draft_lines').insert(lines.map(line => ({ ...line, payroll_draft_id: draft.id }))); if (linesError) throw linesError; }
+  if (normalizedLines.length) { const { error: linesError } = await client.from('timefit_user_payroll_draft_lines').insert(normalizedLines.map(line => ({ ...line, payroll_draft_id: draft.id }))); if (linesError) throw linesError; }
   return draft;
 }
 export async function loadFeedbackItems(organizationId) {
@@ -506,6 +526,21 @@ export async function createCorporateCard({ organizationId, issuer, nickname, la
   const { data, error } = await client.from('timefit_user_corporate_cards').insert({ organization_id: organizationId, issuer: String(issuer || '').trim(), nickname: String(nickname || '').trim(), last4: normalizedLast4, holder_staff_id: holderStaffId || null, provider: 'manual', provider_card_id: providerCardId, created_by: userId }).select('*, holder:timefit_user_staff(display_name)').single();
   if (error) throw error; return data;
 }
+export async function ensureImportedCorporateCard({ organizationId, issuer, nickname, last4, sourceKey }) {
+  const client = requireClient();
+  const userId = (await client.auth.getUser()).data.user?.id;
+  const normalizedLast4 = String(last4 || '').replace(/\D/g, '');
+  if (normalizedLast4.length !== 4) throw new Error('가져오기 출처의 끝 4자리를 확인해 주세요.');
+  const providerCardId = `granter:${String(sourceKey || '').trim()}`;
+  const { data: existing, error: lookupError } = await client.from('timefit_user_corporate_cards').select('id').eq('organization_id', organizationId).eq('provider', 'granter_file').eq('provider_card_id', providerCardId).maybeSingle();
+  if (lookupError) throw lookupError;
+  if (existing?.id) {
+    const { data, error } = await client.from('timefit_user_corporate_cards').update({ issuer, nickname, last4: normalizedLast4, status: 'active', archived_at: null, updated_at: new Date().toISOString() }).eq('id', existing.id).select('*, holder:timefit_user_staff(display_name)').single();
+    if (error) throw error; return data;
+  }
+  const { data, error } = await client.from('timefit_user_corporate_cards').insert({ organization_id: organizationId, issuer, nickname, last4: normalizedLast4, provider: 'granter_file', provider_card_id: providerCardId, created_by: userId }).select('*, holder:timefit_user_staff(display_name)').single();
+  if (error) throw error; return data;
+}
 export async function updateCorporateCard(id, patch) {
   const { data, error } = await requireClient().from('timefit_user_corporate_cards').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', id).select('*, holder:timefit_user_staff(display_name)').single();
   if (error) throw error; return data;
@@ -540,10 +575,17 @@ export async function loadCardConnections(organizationId) {
   return payload.connections || [];
 }
 
-export async function createCardConnection({ organizationId, provider = 'mock', businessType = 'corporation' }) {
+export async function createCardConnection({ organizationId, provider = 'mock', businessType = 'corporation', authentication = {} }) {
   const payload = await cardConnectionRequest('card-connections', {
     method: 'POST',
-    body: { organizationId, provider, businessType, consentVersion: '2026-09-10' },
+    body: { organizationId, provider, businessType, authentication, consentVersion: '2026-09-12-codef-v1' },
+  });
+  return payload.connection;
+}
+
+export async function disconnectCardConnection({ organizationId, connectionId }) {
+  const payload = await cardConnectionRequest('card-connections', {
+    method: 'DELETE', body: { organizationId, connectionId },
   });
   return payload.connection;
 }
@@ -568,6 +610,15 @@ export async function syncCardConnection({ organizationId, connectionId, mode = 
   });
   return payload;
 }
+export async function executeCardSync({ organizationId, runId }) {
+  return cardConnectionRequest('card-sync-execute', {
+    method: 'POST', body: { organizationId, runId },
+  });
+}
+export async function loadCardSyncRun({ organizationId, runId }) {
+  const payload = await cardConnectionRequest('card-sync', { query: { organizationId, runId } });
+  return payload.run;
+}
 export async function reauthenticateCardConnection({ organizationId, connectionId, authentication }) {
   const payload = await cardConnectionRequest('card-connection-reauth', {
     method: 'POST', body: { organizationId, connectionId, authentication },
@@ -588,6 +639,22 @@ export async function loadCardTransactions(organizationId, from, to) {
     amount: Number(item.net_amount || 0),
     transaction_type: item.status === 'cancelled' ? 'cancellation' : item.status === 'partially_cancelled' ? 'partial_cancellation' : item.status,
   }));
+}
+export async function loadBankConnections(organizationId) {
+  return cardConnectionRequest('bank-connections', { query: { organizationId } });
+}
+export async function createBankConnection({ organizationId, authentication }) {
+  return cardConnectionRequest('bank-connections', { method: 'POST', body: { organizationId, authentication } });
+}
+export async function disconnectBankConnection({ organizationId, connectionId }) {
+  return cardConnectionRequest('bank-connections', { method: 'DELETE', body: { organizationId, connectionId } });
+}
+export async function loadBankTransactions({ organizationId, from, to }) {
+  const payload = await cardConnectionRequest('bank-transactions', { query: { organizationId, from, to } });
+  return payload.transactions || [];
+}
+export async function syncBankTransactions({ organizationId, connectionId, from, to }) {
+  return cardConnectionRequest('bank-transactions', { method: 'POST', body: { organizationId, connectionId, from, to } });
 }
 export async function importCardTransactions({ organizationId, corporateCardId, rows }) {
   if (!rows.length) return { imported: 0, duplicates: 0 };

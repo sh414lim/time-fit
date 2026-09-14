@@ -23,6 +23,17 @@ function asDate(value) {
   return value && !Number.isNaN(Date.parse(value)) ? value : null;
 }
 
+export function normalizeSalesSyncRange(from, to) {
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+  if (!from && !to) return null;
+  if (!datePattern.test(from || '') || !datePattern.test(to || '')) throw new Error('동기화 기간은 시작일과 종료일을 모두 선택해 주세요.');
+  const start = new Date(`${from}T00:00:00+09:00`);
+  const end = new Date(`${to}T23:59:59.999+09:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) throw new Error('동기화 기간을 확인해 주세요.');
+  if (end.getTime() - start.getTime() > 366 * 24 * 60 * 60 * 1000) throw new Error('한 번에 동기화할 수 있는 기간은 최대 1년입니다.');
+  return { from: start.toISOString(), to: end.toISOString() };
+}
+
 function normalizeOrder(order, merchantId, organizationId) {
   return {
     organization_id: organizationId,
@@ -96,26 +107,34 @@ async function readConnections(organizationId) {
   return rows;
 }
 
-async function syncConnection({ organizationId, merchantId, page, size, mode, credentialSource, encryptedAccessKey, encryptedAccessSecret }) {
+async function syncConnection({ organizationId, merchantId, page, size, mode, range, credentialSource, encryptedAccessKey, encryptedAccessSecret }) {
   const accessKey = credentialSource === 'custom' ? decryptSecret(encryptedAccessKey) : process.env.TOSSPLACE_ACCESS_KEY;
   const accessSecret = credentialSource === 'custom' ? decryptSecret(encryptedAccessSecret) : process.env.TOSSPLACE_ACCESS_SECRET;
   if (!accessKey || !accessSecret) throw new Error('Toss Place credentials are unavailable');
-  const params = new URLSearchParams({ page: String(page), size: String(size), sortOrder: 'DESC' });
-  if (mode === 'daily') params.set('from', new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
   await saveSyncState({ merchant_id: Number(merchantId), organization_id: organizationId, last_sync_started_at: new Date().toISOString(), last_sync_error: null, updated_at: new Date().toISOString() });
-  const response = await fetch(`${TOSS_API}/merchants/${merchantId}/order/orders?${params}`, {
-    headers: { 'x-access-key': accessKey, 'x-secret-key': accessSecret, 'Content-Type': 'application/json' },
-  });
-  const body = await response.json().catch(() => null);
-  if (!response.ok || body?.resultType !== 'SUCCESS') {
-    const detail = String(body?.error?.message || body?.message || body?.errorCode || '').slice(0, 160);
-    if (response.status === 401) throw new Error('Toss Place 인증에 실패했습니다. Access Key·Secret과 POS 서비스 코드 연결을 확인해 주세요.');
-    if (response.status === 403) throw new Error('Toss Place 주문 조회 권한이 없습니다. 해당 앱에 매장 주문 조회 권한이 있는지 확인해 주세요.');
-    if (response.status === 404) throw new Error('Toss Place 판매점 ID 또는 주문 조회 경로를 확인해 주세요.');
-    throw new Error(detail ? `Toss Place 주문 조회 실패 (${response.status}): ${detail}` : `Toss Place 주문 조회 실패 (${response.status})`);
+  let currentPage = page;
+  let synchronized = 0;
+  for (let batch = 0; batch < (range ? 20 : 1); batch += 1) {
+    const params = new URLSearchParams({ page: String(currentPage), size: String(size), sortOrder: 'DESC' });
+    if (range) { params.set('from', range.from); params.set('to', range.to); }
+    else if (mode === 'daily') params.set('from', new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
+    const response = await fetch(`${TOSS_API}/merchants/${merchantId}/order/orders?${params}`, {
+      headers: { 'x-access-key': accessKey, 'x-secret-key': accessSecret, 'Content-Type': 'application/json' },
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok || body?.resultType !== 'SUCCESS') {
+      const detail = String(body?.error?.message || body?.message || body?.errorCode || '').slice(0, 160);
+      if (response.status === 401) throw new Error('Toss Place 인증에 실패했습니다. Access Key·Secret과 POS 서비스 코드 연결을 확인해 주세요.');
+      if (response.status === 403) throw new Error('Toss Place 주문 조회 권한이 없습니다. 해당 앱에 매장 주문 조회 권한이 있는지 확인해 주세요.');
+      if (response.status === 404) throw new Error('Toss Place 판매점 ID 또는 주문 조회 경로를 확인해 주세요.');
+      throw new Error(detail ? `Toss Place 주문 조회 실패 (${response.status}): ${detail}` : `Toss Place 주문 조회 실패 (${response.status})`);
+    }
+    const orders = Array.isArray(body.success) ? body.success : (body.success?.items ?? []);
+    await upsertOrders(orders.filter(order => order?.id).map(order => normalizeOrder(order, merchantId, organizationId)));
+    synchronized += orders.length;
+    if (!range || orders.length < size) break;
+    currentPage += 1;
   }
-  const orders = Array.isArray(body.success) ? body.success : (body.success?.items ?? []);
-  await upsertOrders(orders.filter(order => order?.id).map(order => normalizeOrder(order, merchantId, organizationId)));
   // Aggregation happens during background sync, never when a manager opens
   // the sales page. This keeps the dashboard read path consistently light.
   await refreshDailySalesSummary(organizationId, merchantId);
@@ -124,7 +143,7 @@ async function syncConnection({ organizationId, merchantId, page, size, mode, cr
     method: 'PATCH', headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
     body: JSON.stringify({ connection_status: 'connected', last_synced_at: new Date().toISOString(), last_error: null }),
   });
-  return orders.length;
+  return synchronized;
 }
 
 async function markConnectionError(organizationId, message) {
@@ -156,16 +175,20 @@ export default async function handler(req, res) {
 
   const page = Math.max(1, Number.parseInt(req.query.page ?? "1", 10) || 1);
   const size = Math.min(500, Math.max(1, Number.parseInt(req.query.size ?? "500", 10) || 500));
-  const mode = req.query.mode === "backfill" ? "backfill" : "daily";
+  const requestedMode = req.query.mode ?? req.body?.mode;
+  const mode = requestedMode === 'backfill' ? 'backfill' : requestedMode === 'range' ? 'range' : 'daily';
+  const requestedFrom = req.query.from ?? req.body?.from;
+  const requestedTo = req.query.to ?? req.body?.to;
   const organizationId = cronRequest ? requestedOrganizationId : requestedOrganizationId;
 
   try {
+    const range = normalizeSalesSyncRange(requestedFrom, requestedTo);
     const connections = await readConnections(organizationId);
     if (!connections.length) return res.status(200).json({ ok: true, mode, synchronized: 0, stores: 0, message: 'No enabled Toss Place store connection' });
     const results = [];
     for (const connection of connections) {
       if (!connection.merchant_id) continue;
-      const count = await syncConnection({ organizationId: connection.organization_id, merchantId: connection.merchant_id, page, size, mode, credentialSource: connection.credential_source, encryptedAccessKey: connection.encrypted_access_key, encryptedAccessSecret: connection.encrypted_access_secret });
+      const count = await syncConnection({ organizationId: connection.organization_id, merchantId: connection.merchant_id, page, size, mode, range, credentialSource: connection.credential_source, encryptedAccessKey: connection.encrypted_access_key, encryptedAccessSecret: connection.encrypted_access_secret });
       results.push({ organizationId: connection.organization_id, synchronized: count });
     }
     return res.status(200).json({ ok: true, mode, page, synchronized: results.reduce((sum, item) => sum + item.synchronized, 0), stores: results.length, results });

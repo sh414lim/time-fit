@@ -1,23 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import cardConnections from '../api/card-connections.js';
-import cardConnectionReauth from '../api/card-connection-reauth.js';
-import cardSync from '../api/card-sync.js';
-import cardSyncWorker from '../api/card-sync-worker.js';
-import { matchScore, matchingClassificationRule, receiptFingerprint, receiptRetryBlocker, structuredReceipt } from '../api/receipt-process.js';
-import expenseReview, { eligibleBulkMatches } from '../api/expense-review.js';
-import { buildCloseoutCompleteness, buildDailyLaborMap, buildFinanceReport, compareFinanceReports, groupFinanceSeries, previousFinanceRange } from '../api/finance-report.js';
-import closeouts from '../api/closeouts.js';
-import { mergeReceiptExtractions, validateReceiptExtraction } from '../api/_receipt-llm.js';
-import { buildExpenseExceptions } from '../api/expense-exceptions.js';
-import expenseReminderWorker, { dueReminderNumber } from '../api/expense-reminder-worker.js';
+import cardConnections from '../server/api/card-connections.js';
+import bankConnections from '../server/api/bank-connections.js';
+import bankTransactions from '../server/api/bank-transactions.js';
+import cardConnectionReauth from '../server/api/card-connection-reauth.js';
+import cardSync from '../server/api/card-sync.js';
+import cardSyncExecute from '../server/api/card-sync-execute.js';
+import cardSyncWorker from '../server/api/card-sync-worker.js';
+import { matchScore, matchingClassificationRule, receiptFingerprint, receiptRetryBlocker, structuredReceipt } from '../server/api/receipt-process.js';
+import expenseReview, { eligibleBulkMatches } from '../server/api/expense-review.js';
+import { buildCloseoutCompleteness, buildDailyLaborMap, buildFinanceReport, compareFinanceReports, groupFinanceSeries, previousFinanceRange } from '../server/api/finance-report.js';
+import closeouts from '../server/api/closeouts.js';
+import { mergeReceiptExtractions, validateReceiptExtraction } from '../server/api/_receipt-llm.js';
+import { buildExpenseExceptions } from '../server/api/expense-exceptions.js';
+import expenseReminderWorker, { dueReminderNumber } from '../server/api/expense-reminder-worker.js';
 import { analyzeReceiptPixels } from '../src/features/finance/receiptQuality.js';
-import expenses, { summarizeExpenses, validateManualExpense } from '../api/expenses.js';
-import expenseDetail from '../api/expense-detail.js';
+import expenses, { summarizeExpenses, validateManualExpense } from '../server/api/expenses.js';
+import expenseDetail from '../server/api/expense-detail.js';
 import { expenseLedgerCsv } from '../src/features/finance/expenseExport.js';
 import { financeReportCsvRows } from '../src/features/finance/financeReportExport.js';
-import { normalizeHyphenCards, normalizeHyphenEvents } from '../api/providers/hyphen-card-provider.js';
-import { cardRetryPlan, cardSyncErrorCategory, cardSyncWindow } from '../api/_card-sync-runner.js';
+import { normalizeHyphenCards, normalizeHyphenEvents } from '../server/api/providers/hyphen-card-provider.js';
+import { codefBaseUrl, normalizeCodefBankAccounts, normalizeCodefBankTransactions, normalizeCodefCards, normalizeCodefEvents, normalizeCodefPurchases } from '../server/api/providers/codef-card-provider.js';
+import { cardRetryPlan, cardSyncErrorCategory, cardSyncWindow } from '../server/api/_card-sync-runner.js';
 
 function responseRecorder() {
   return {
@@ -44,6 +48,74 @@ test('카드 연결 API는 로그인하지 않은 요청을 차단한다', async
   assert.equal(res.statusCode, 401);
 });
 
+test('CODEF 환경은 샌드박스 URL을 기본값으로 사용한다', () => {
+  const before = process.env.CODEF_ENV;
+  delete process.env.CODEF_ENV;
+  try { assert.equal(codefBaseUrl(), 'https://sandbox.codef.io'); }
+  finally { if (before === undefined) delete process.env.CODEF_ENV; else process.env.CODEF_ENV = before; }
+});
+
+test('CODEF 법인 보유카드를 PAN 없이 안정 식별자로 정규화한다', () => {
+  const cards = normalizeCodefCards({ data: [{ resCardNo: '1234-****-****-4821', resCardName: '비즈카드', resIssueDate: '20250101', resSleepYn: '0' }] }, '0301');
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].last4, '4821');
+  assert.match(cards[0].providerAssetId, /^codef-card-[a-f0-9]{32}$/);
+  assert.equal(cards[0].providerAssetId.includes('1234'), false);
+});
+
+test('CODEF 승인·부분취소·거절을 표준 이벤트로 정규화한다', () => {
+  const shared = { resCardNo: '1234-****-****-4821', resUsedDate: '20260912', resUsedTime: '093000', resApprovalNo: 'A100', resMemberStoreName: '테스트마트' };
+  const events = normalizeCodefEvents({ data: [
+    { ...shared, resUsedAmount: '120,000', resCancelYN: '0', resVAT: '10909' },
+    { ...shared, resUsedTime: '103000', resUsedAmount: '20,000', resCancelAmount: '20,000', resCancelYN: '2' },
+    { ...shared, resUsedTime: '113000', resUsedAmount: '5,000', resCancelYN: '3' },
+  ] }, '0301');
+  assert.deepEqual(events.map(event => event.eventType), ['approval', 'partial_cancellation', 'declined']);
+  assert.equal(events[0].amount, 120000);
+  assert.equal(events[0].vatAmount, 10909);
+  assert.equal(events[1].amount, 20000);
+  assert.equal(events[0].groupKey, events[1].groupKey);
+});
+
+test('CODEF 매입내역을 승인 그룹의 acquisition 이벤트로 정규화한다', () => {
+  const events = normalizeCodefPurchases({ data: [{ resCardNo: '1234-****-****-4821', resUsedDate: '20260912', resUsedTime: '093000', resPurchaseDate: '20260913', resApprovalNo: 'A100', resUsedAmount: '120000', resMemberStoreName: '테스트마트' }] }, '0301');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].eventType, 'acquisition');
+  assert.equal(events[0].amount, 120000);
+  assert.equal(events[0].occurredAt, '2026-09-13T00:30:00.000Z');
+});
+
+test('CODEF 법인 보유계좌는 계좌번호 원문 없이 정규화한다', () => {
+  process.env.INTEGRATION_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
+  const accounts = normalizeCodefBankAccounts({ data: [{ resAccount: '123-456-789012', resAccountName: '운영계좌', resBankName: 'KB국민은행', resAccountBalance: '1,250,000' }] }, '0004');
+  assert.equal(accounts.length, 1);
+  assert.equal(accounts[0].last4, '9012');
+  assert.equal(accounts[0].balance, 1250000);
+  assert.equal(JSON.stringify(accounts).includes('123-456-789012'), false);
+});
+
+test('법인계좌 연결 API는 로그인하지 않은 등록을 차단한다', async () => {
+  configure(); const res = responseRecorder();
+  await bankConnections({ method: 'POST', headers: {}, body: { organizationId: 'org-1' } }, res);
+  assert.equal(res.statusCode, 401);
+});
+
+test('CODEF 법인계좌 입출금 내역을 중복 식별 가능한 모델로 변환한다', () => {
+  const rows = normalizeCodefBankTransactions({ data: { resTrHistoryList: [
+    { resAccountTrDate: '20260912', resAccountTrTime: '093000', resAccountOut: '120,000', resAccountIn: '0', resAfterTranBalance: '880000', resAccountDesc1: '식자재마트', resAccountDesc2: '인터넷' },
+    { resAccountTrDate: '20260912', resAccountTrTime: '103000', resAccountOut: '0', resAccountIn: '300,000', resAfterTranBalance: '1180000', resAccountDesc1: '매출입금' },
+  ] } }, 'account-1');
+  assert.deepEqual(rows.map(item => [item.direction, item.amount]), [['withdrawal', 120000], ['deposit', 300000]]);
+  assert.match(rows[0].providerTransactionId, /^codef-bank-tx-/);
+  assert.equal(rows[0].description, '식자재마트 · 인터넷');
+});
+
+test('법인계좌 거래내역 API는 로그인하지 않은 동기화를 차단한다', async () => {
+  configure(); const res = responseRecorder();
+  await bankTransactions({ method: 'POST', headers: {}, body: { organizationId: 'org-1' } }, res);
+  assert.equal(res.statusCode, 401);
+});
+
 test('조직 소유자는 Mock 카드 연결 초안을 생성한다', async () => {
   configure();
   const originalFetch = globalThis.fetch;
@@ -60,12 +132,40 @@ test('조직 소유자는 Mock 카드 연결 초안을 생성한다', async () =
     await cardConnections({ method: 'POST', headers: { authorization: 'Bearer user-token' }, body: { organizationId: 'org-1', provider: 'mock', businessType: 'corporation', consentVersion: 'test-v1' } }, res);
     assert.equal(res.statusCode, 201);
     assert.equal(res.body.connection.provider, 'mock');
+    assert.equal('credential_reference_encrypted' in res.body.connection, false);
     const saved = JSON.parse(calls.at(-1).options.body)[0];
     assert.equal(saved.organization_id, 'org-1');
     assert.equal(saved.consented_by, 'user-1');
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('카드 연결 해제는 자격정보를 폐기하고 연결 카드와 자산을 중지한다', async () => {
+  configure();
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const value = String(url); calls.push({ value, options });
+    if (value.includes('/auth/v1/user')) return jsonResponse({ id: 'user-1' });
+    if (value.includes('/timefit_user_organizations')) return jsonResponse([{ id: 'org-1', owner_id: 'user-1' }]);
+    if (value.includes('/timefit_user_card_connections?') && (!options.method || options.method === 'GET')) return jsonResponse([{ id: 'connection-1', organization_id: 'org-1', provider: 'codef', status: 'active', credential_reference_encrypted: 'encrypted-secret' }]);
+    if (value.includes('/timefit_user_card_connections?') && options.method === 'PATCH') return jsonResponse([{ id: 'connection-1', provider: 'codef', status: 'disconnected', credential_reference_encrypted: null }]);
+    if (value.includes('/timefit_user_connection_assets?') || value.includes('/timefit_user_corporate_cards?')) return jsonResponse(null);
+    if (value.endsWith('/rest/v1/timefit_user_expense_audit_logs')) return jsonResponse(null, 201);
+    throw new Error(`unexpected_fetch:${url}`);
+  };
+  try {
+    const res = responseRecorder();
+    await cardConnections({ method: 'DELETE', headers: { authorization: 'Bearer user-token' }, body: { organizationId: 'org-1', connectionId: 'connection-1' } }, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.connection.status, 'disconnected');
+    assert.equal('credential_reference_encrypted' in res.body.connection, false);
+    const connectionPatch = calls.find(call => call.value.includes('/timefit_user_card_connections?') && call.options.method === 'PATCH');
+    assert.equal(JSON.parse(connectionPatch.options.body).credential_reference_encrypted, null);
+    assert.equal(calls.some(call => call.value.includes('/timefit_user_connection_assets?') && call.options.method === 'PATCH'), true);
+    assert.equal(calls.some(call => call.value.includes('/timefit_user_corporate_cards?') && call.options.method === 'PATCH'), true);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('카드 재인증 API는 소유자 확인 없이 인증정보를 바꾸지 않는다', async () => {
@@ -93,6 +193,7 @@ test('카드 재인증은 검증 후 연결을 복구하고 비밀값 없는 감
     await cardConnectionReauth({ method: 'POST', headers: { authorization: 'Bearer user-token' }, body: { organizationId: 'org-1', connectionId: 'connection-1', authentication: {} } }, res);
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.connection.status, 'active');
+    assert.equal('credential_reference_encrypted' in res.body.connection, false);
     const auditCall = calls.find(call => call.value.endsWith('/rest/v1/timefit_user_expense_audit_logs'));
     const audit = JSON.parse(auditCall.options.body)[0];
     assert.equal(audit.action, 'credentials_refreshed');
@@ -120,6 +221,62 @@ test('동일 백필 요청은 기존 동기화 작업을 반환한다', async ()
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('신규 카드 동기화 요청은 Provider를 기다리지 않고 작업만 접수한다', async () => {
+  configure();
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const value = String(url); calls.push({ value, options });
+    if (value.includes('/auth/v1/user')) return jsonResponse({ id: 'user-1' });
+    if (value.includes('/timefit_user_organizations')) return jsonResponse([{ id: 'org-1', owner_id: 'user-1' }]);
+    if (value.includes('/timefit_user_card_connections')) return jsonResponse([{ id: 'connection-1', organization_id: 'org-1', provider: 'codef' }]);
+    if (value.includes('/timefit_user_card_sync_runs?')) return jsonResponse([]);
+    if (value.endsWith('/rest/v1/timefit_user_card_sync_runs') && options.method === 'POST') return jsonResponse([{ id: 'run-queued', status: 'queued' }], 201);
+    throw new Error(`unexpected_fetch:${url}`);
+  };
+  try {
+    const res = responseRecorder();
+    await cardSync({ method: 'POST', headers: { authorization: 'Bearer user-token' }, body: { organizationId: 'org-1', connectionId: 'connection-1', mode: 'backfill' } }, res);
+    assert.equal(res.statusCode, 202);
+    assert.equal(res.body.queued, true);
+    assert.equal(res.body.runId, 'run-queued');
+    assert.equal(calls.some(call => call.value.includes('sandbox.codef.io')), false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('수동 카드 동기화 실행은 로그인하지 않은 요청을 차단한다', async () => {
+  configure();
+  const res = responseRecorder();
+  await cardSyncExecute({ method: 'POST', headers: {}, body: { organizationId: 'org-1', runId: 'run-1' } }, res);
+  assert.equal(res.statusCode, 401);
+});
+
+test('수동 카드 동기화는 큐 작업을 즉시 실행한다', async () => {
+  configure();
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const value = String(url); calls.push({ value, options });
+    if (value.includes('/auth/v1/user')) return jsonResponse({ id: 'user-1' });
+    if (value.includes('/timefit_user_organizations')) return jsonResponse([{ id: 'org-1', owner_id: 'user-1' }]);
+    if (value.includes('/timefit_user_card_sync_runs?') && options.method === 'PATCH') return jsonResponse([{ id: 'run-1', organization_id: 'org-1', connection_id: 'connection-1', idempotency_key: 'connection-1:backfill:initial', status: 'running' }]);
+    if (value.includes('/timefit_user_card_connections?') && (!options.method || options.method === 'GET')) return jsonResponse([{ id: 'connection-1', organization_id: 'org-1', provider: 'mock', status: 'backfilling' }]);
+    if (value.includes('/timefit_user_corporate_cards?')) return jsonResponse([{ id: 'card-1', provider_card_id: 'mock-card-corporate-4821' }]);
+    if (value.includes('/timefit_user_card_sync_cursors?') && (!options.method || options.method === 'GET')) return jsonResponse([]);
+    if (value.includes('/rpc/timefit_user_import_card_events')) return jsonResponse({ imported: 2, duplicates: 0, groups: 1 });
+    if (value.includes('/timefit_user_card_sync_cursors?') && options.method === 'POST') return jsonResponse(null, 201);
+    if ((value.includes('/timefit_user_card_sync_runs?') || value.includes('/timefit_user_card_connections?')) && options.method === 'PATCH') return jsonResponse(null);
+    throw new Error(`unexpected_fetch:${url}`);
+  };
+  try {
+    const res = responseRecorder();
+    await cardSyncExecute({ method: 'POST', headers: { authorization: 'Bearer user-token' }, body: { organizationId: 'org-1', runId: 'run-1' } }, res);
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body.result, { imported: 2, duplicates: 0, groups: 1 });
+    assert.equal(calls.some(call => call.value.includes('/rpc/timefit_user_import_card_events')), true);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('예약 카드 동기화 워커는 비밀키가 없는 요청을 차단한다', async () => {
@@ -181,6 +338,23 @@ test('매출·확정 지출·월 급여 초안으로 운영순익을 계산한�
   });
   assert.deepEqual({ netSales: report.totals.netSales, operatingExpenses: report.totals.operatingExpenses, laborCost: report.totals.laborCost, operatingProfit: report.totals.operatingProfit, profitMargin: report.totals.profitMargin }, { netSales: 800000, operatingExpenses: 100000, laborCost: 200000, operatingProfit: 500000, profitMargin: 62.5 });
   assert.equal(report.completeness.payrollComplete, true);
+});
+
+test('영수증이 없는 미대사 카드 사용액도 잠정 운영지출과 순익에 반영한다', () => {
+  const report = buildFinanceReport({
+    from: '2026-09-01', to: '2026-09-02',
+    salesRows: [{ sales_date: '2026-09-01', completed_amount: 500000 }],
+    expenses: [{ transaction_date: '2026-09-01', total_amount: 100000, category: '재료비' }],
+    unreconciledCardTransactions: [
+      { approved_at: '2026-09-01T12:00:00+09:00', net_amount: 50000 },
+      { approved_at: '2026-09-02T12:00:00+09:00', net_amount: 30000 },
+    ],
+  });
+  assert.equal(report.totals.confirmedExpenses, 100000);
+  assert.equal(report.totals.provisionalCardExpenses, 80000);
+  assert.equal(report.totals.operatingExpenses, 180000);
+  assert.equal(report.totals.operatingProfit, 320000);
+  assert.equal(report.series[0].provisionalCardExpenses, 50000);
 });
 
 test('버터빌라 손익 기준으로 구매비·카드수수료·매출연동 임대료를 계산한다', () => {
