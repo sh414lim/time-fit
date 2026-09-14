@@ -1,6 +1,8 @@
 import { authorizeFinance, financeError, financeRest, financeServerConfigured, methodNotAllowed } from './_finance-server.js';
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const kstStartIso = date => new Date(`${date}T00:00:00+09:00`).toISOString();
+const kstExclusiveEndIso = date => new Date(new Date(`${date}T00:00:00+09:00`).getTime() + 86400000).toISOString();
 export function summarizeExpenses(items = []) {
   return {
     count: items.length,
@@ -8,6 +10,28 @@ export function summarizeExpenses(items = []) {
     confirmedAmount: items.filter(item => item.status === 'confirmed').reduce((sum, item) => sum + Number(item.total_amount || 0), 0),
     reviewCount: items.filter(item => item.status === 'review_required').length,
     missingEvidenceCount: items.filter(item => !item.sources?.some(source => source.source_type === 'receipt')).length,
+  };
+}
+export function provisionalCardExpense(transaction) {
+  return {
+    id: `card:${transaction.id}`,
+    ledger_entry_id: null,
+    transaction_date: String(transaction.approved_at || transaction.acquired_at || '').slice(0, 10),
+    total_amount: Number(transaction.net_amount || 0),
+    supply_amount: null,
+    vat_amount: null,
+    merchant_name: transaction.merchant_name || '사용처 미확인',
+    merchant_business_number: null,
+    category: null,
+    reason: '영수증 미첨부 카드 지출',
+    status: 'review_required',
+    source_confidence: 1,
+    confirmed_at: null,
+    created_at: transaction.approved_at || transaction.acquired_at,
+    staff: transaction.card?.holder || null,
+    sources: [{ id: `card-source:${transaction.id}`, source_type: 'card_transaction_group', source_id: transaction.id, is_primary: true }],
+    receipt_missing: true,
+    provisional: true,
   };
 }
 export function validateManualExpense(input = {}) {
@@ -43,6 +67,18 @@ export default async function handler(req, res) {
     if (category) filters.push(`category=eq.${encodeURIComponent(category)}`);
     if (query) filters.push(`or=(merchant_name.ilike.*${encodeURIComponent(String(query).slice(0, 50))}*,reason.ilike.*${encodeURIComponent(String(query).slice(0, 50))}*)`);
     const items = await financeRest(`timefit_user_expenses?${filters.join('&')}&select=id,ledger_entry_id,transaction_date,total_amount,supply_amount,vat_amount,merchant_name,merchant_business_number,category,reason,status,source_confidence,confirmed_at,created_at,staff:timefit_user_staff(display_name,department),sources:timefit_user_expense_sources(id,source_type,source_id,is_primary)&order=transaction_date.desc,created_at.desc&limit=500`);
-    return res.status(200).json({ ok: true, items, summary: summarizeExpenses(items) });
+    const linkedCardIds = new Set(items.flatMap(item => item.sources || []).filter(sourceItem => sourceItem.source_type === 'card_transaction_group').map(sourceItem => sourceItem.source_id));
+    const showProvisional = !status || status === 'review_required';
+    let provisionalItems = [];
+    if (showProvisional && !category) {
+      const cardFilters = [`organization_id=eq.${encodeURIComponent(organizationId)}`, 'net_amount=gt.0'];
+      if (from) cardFilters.push(`approved_at=gte.${encodeURIComponent(kstStartIso(from))}`);
+      if (to) cardFilters.push(`approved_at=lt.${encodeURIComponent(kstExclusiveEndIso(to))}`);
+      const transactions = await financeRest(`timefit_user_card_transaction_groups?${cardFilters.join('&')}&select=id,merchant_name,net_amount,approval_number,approved_at,acquired_at,status,card:timefit_user_corporate_cards(issuer,nickname,last4,holder:timefit_user_staff(display_name,department))&order=approved_at.desc&limit=500`);
+      const normalizedQuery = String(query || '').trim().toLowerCase();
+      provisionalItems = transactions.filter(transaction => !linkedCardIds.has(transaction.id) && (!normalizedQuery || String(transaction.merchant_name || '').toLowerCase().includes(normalizedQuery))).map(provisionalCardExpense);
+    }
+    const combined = [...items, ...provisionalItems].sort((a, b) => String(b.transaction_date || b.created_at || '').localeCompare(String(a.transaction_date || a.created_at || ''))).slice(0, 500);
+    return res.status(200).json({ ok: true, items: combined, summary: summarizeExpenses(combined) });
   } catch (error) { return financeError(res, error, '지출 원장을 불러오지 못했습니다.'); }
 }

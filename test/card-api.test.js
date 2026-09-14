@@ -15,7 +15,7 @@ import { mergeReceiptExtractions, validateReceiptExtraction } from '../server/ap
 import { buildExpenseExceptions } from '../server/api/expense-exceptions.js';
 import expenseReminderWorker, { dueReminderNumber } from '../server/api/expense-reminder-worker.js';
 import { analyzeReceiptPixels } from '../src/features/finance/receiptQuality.js';
-import expenses, { summarizeExpenses, validateManualExpense } from '../server/api/expenses.js';
+import expenses, { provisionalCardExpense, summarizeExpenses, validateManualExpense } from '../server/api/expenses.js';
 import expenseDetail from '../server/api/expense-detail.js';
 import { expenseLedgerCsv } from '../src/features/finance/expenseExport.js';
 import { financeReportCsvRows } from '../src/features/finance/financeReportExport.js';
@@ -439,6 +439,15 @@ test('지출 원장 합계에서 제외 건을 빼고 미증빙 건을 집계한
     { total_amount: 30000, status: 'excluded', sources: [] },
   ]);
   assert.deepEqual(summary, { count: 3, totalAmount: 150000, confirmedAmount: 100000, reviewCount: 1, missingEvidenceCount: 2 });
+});
+
+test('영수증 없는 카드 승인은 조회 가능한 임시 지출로 변환한다', () => {
+  const item = provisionalCardExpense({ id: 'transaction-1', merchant_name: '식자재마트', net_amount: 48000, approved_at: '2026-09-14T03:00:00Z', card: { holder: { display_name: '김관리' } } });
+  assert.equal(item.id, 'card:transaction-1');
+  assert.equal(item.status, 'review_required');
+  assert.equal(item.receipt_missing, true);
+  assert.equal(item.total_amount, 48000);
+  assert.equal(item.sources[0].source_type, 'card_transaction_group');
 });
 
 test('지출 원장 API는 로그인하지 않은 요청을 차단한다', async () => {

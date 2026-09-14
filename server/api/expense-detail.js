@@ -8,6 +8,18 @@ export default async function handler(req, res) {
   if (!auth) return res.status(req.headers.authorization ? 403 : 401).json({ ok: false, error: '관리자 인증이 필요합니다.' });
   if (!expenseId) return res.status(400).json({ ok: false, error: '지출 항목을 선택해 주세요.' });
   try {
+    if (String(expenseId).startsWith('card:')) {
+      const transactionId = String(expenseId).slice(5);
+      const transactions = await financeRest(`timefit_user_card_transaction_groups?id=eq.${encodeURIComponent(transactionId)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=id,status,approved_amount,acquired_amount,cancelled_amount,net_amount,approval_number,approved_at,acquired_at,billed_at,merchant_name,card:timefit_user_corporate_cards(issuer,nickname,last4,holder:timefit_user_staff(display_name,department))&limit=1`);
+      if (!transactions.length) return res.status(404).json({ ok: false, error: '카드 지출 항목을 찾을 수 없습니다.' });
+      const transaction = transactions[0];
+      return res.status(200).json({
+        ok: true,
+        expense: { id: expenseId, transaction_date: String(transaction.approved_at || '').slice(0, 10), merchant_name: transaction.merchant_name, total_amount: transaction.net_amount, status: 'review_required', provisional: true },
+        sources: [{ id: `card-source:${transaction.id}`, source_type: 'card_transaction_group', source_id: transaction.id, is_primary: true }],
+        documents: [], transactions, audits: [],
+      });
+    }
     const expenses = await financeRest(`timefit_user_expenses?id=eq.${encodeURIComponent(expenseId)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=*,staff:timefit_user_staff(display_name,department,job_title)&limit=1`);
     if (!expenses.length) return res.status(404).json({ ok: false, error: '지출 원장 항목을 찾을 수 없습니다.' });
     const sources = await financeRest(`timefit_user_expense_sources?expense_id=eq.${encodeURIComponent(expenseId)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=id,source_type,source_id,is_primary,match_reason,created_at&order=is_primary.desc,created_at.asc`);
