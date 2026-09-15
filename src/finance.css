@@ -352,6 +352,35 @@
 .finance-completeness { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 12px 14px; border-radius: 11px; background: #fff8eb; color: #8a5a00; }
 .finance-completeness b { font-size: 12px; }
 .finance-completeness span { font-size: 11px; }
+.finance-profit-bridge { margin-top: 18px; padding: 18px; border: 1px solid #dce8f8; border-radius: 14px; background: #fbfdff; }
+.finance-profit-bridge-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; }
+.finance-profit-bridge-title h3 { margin: 0; font-size: 15px; }
+.finance-profit-bridge-title p,.finance-profit-bridge-foot { margin: 5px 0 0; color: #718096; font-size: 10px; }
+.finance-profit-bridge-switch { display: flex; flex-shrink: 0; padding: 3px; border-radius: 10px; background: #edf2f8; }
+.finance-profit-bridge-switch button { padding: 7px 10px; border: 0; border-radius: 8px; background: transparent; color: #718096; font-size: 10px; font-weight: 800; cursor: pointer; }
+.finance-profit-bridge-switch button.active { background: #fff; color: #2469c8; box-shadow: 0 1px 5px #233e591c; }
+.finance-profit-bridge-flow { display: grid; gap: 10px; margin-top: 18px; }
+.finance-profit-bridge-row { display: grid; grid-template-columns: 78px minmax(0,1fr) minmax(110px,auto); align-items: center; gap: 12px; }
+.finance-profit-bridge-row .label { color: #40516a; font-size: 11px; font-weight: 800; }
+.finance-profit-bridge-row .track { position: relative; height: 32px; overflow: hidden; border-radius: 7px; background: #edf2f7; }
+.finance-profit-bridge-row .bar { position: absolute; top: 0; bottom: 0; display: block; min-width: 2px; border-radius: 6px; background: #3182f6; }
+.finance-profit-bridge-row.expenses .bar { background: #f59f00; }
+.finance-profit-bridge-row.labor .bar { background: #8b5cf6; }
+.finance-profit-bridge-row.profit .bar { background: #00a873; }
+.finance-profit-bridge-row.profit:has(.negative) .bar { background: #d92d3a; }
+.finance-profit-bridge-row.forecast .bar { opacity: .78; background-image: repeating-linear-gradient(115deg,transparent 0 10px,#ffffff50 10px 15px); }
+.finance-profit-bridge-row .remaining { position: absolute; z-index: 1; top: 50%; left: 8px; transform: translateY(-50%); color: #31415b; font-size: 9px; font-weight: 800; text-shadow: 0 1px #fff; white-space: nowrap; }
+.finance-profit-bridge-row strong { color: #26374c; font-size: 12px; text-align: right; white-space: nowrap; }
+.finance-profit-bridge-row strong.negative { color: #d92d3a; }
+.finance-profit-bridge-foot { margin-top: 16px; border-top: 1px solid #e6edf5; padding-top: 12px; }
+@media (max-width: 640px) {
+  .finance-profit-bridge-title { flex-direction: column; }
+  .finance-profit-bridge-switch { width: 100%; }
+  .finance-profit-bridge-switch button { flex: 1; }
+  .finance-profit-bridge-row { grid-template-columns: 1fr auto; gap: 5px 8px; }
+  .finance-profit-bridge-row .track { grid-column: 1 / -1; grid-row: 2; }
+  .finance-profit-bridge-row strong { grid-column: 2; grid-row: 1; }
+}
 .profit-chart { position: relative; height: 250px; margin-top: 18px; padding: 10px 10px 24px 76px; border: 1px solid #edf1f5; border-radius: 14px; background: linear-gradient(180deg,#fbfdff,#fff); }
 .profit-chart svg { width: 100%; height: 100%; overflow: visible; }
 .profit-chart line { stroke: #dfe7f0; stroke-width: 1; stroke-dasharray: 8 7; }

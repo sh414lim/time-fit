@@ -19,9 +19,20 @@ import expenses, { provisionalCardExpense, summarizeExpenses, validateManualExpe
 import expenseDetail from '../server/api/expense-detail.js';
 import { expenseLedgerCsv } from '../src/features/finance/expenseExport.js';
 import { financeReportCsvRows } from '../src/features/finance/financeReportExport.js';
+import { buildProfitBridge } from '../src/features/finance/profitBridgeModel.js';
 import { normalizeHyphenCards, normalizeHyphenEvents } from '../server/api/providers/hyphen-card-provider.js';
 import { codefBaseUrl, normalizeCodefBankAccounts, normalizeCodefBankTransactions, normalizeCodefCards, normalizeCodefEvents, normalizeCodefPurchases } from '../server/api/providers/codef-card-provider.js';
 import { cardRetryPlan, cardSyncErrorCategory, cardSyncWindow } from '../server/api/_card-sync-runner.js';
+
+test('손익 브리지는 매출에서 운영지출과 인건비를 차감하며 적자도 유지한다', () => {
+  const positive = buildProfitBridge({ netSales: 100000, operatingExpenses: 27000, laborCost: 32000 });
+  assert.deepEqual(positive.steps.map(step => step.remaining), [100000, 73000, 41000, 41000]);
+  assert.equal(positive.profit, 41000);
+  const negative = buildProfitBridge({ netSales: 20000, operatingExpenses: 25000, laborCost: 10000 });
+  assert.equal(negative.profit, -15000);
+  assert.equal(negative.scale, 25000);
+  assert.equal(buildProfitBridge({}).scale, 1);
+});
 
 function responseRecorder() {
   return {
