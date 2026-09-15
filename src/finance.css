@@ -5,6 +5,9 @@
 .expense-workspace-tabs button { min-height: 42px; padding: 0 18px; flex: 0 0 auto; border: 0; border-radius: 10px; background: transparent; color: #6b7684; font: 800 12px inherit; cursor: pointer; white-space: nowrap; }
 .expense-workspace-tabs button:hover { color: #1b64da; background: #eef6ff; }
 .expense-workspace-tabs button.active { color: #1b64da; background: #fff; box-shadow: 0 2px 9px rgba(25,31,40,.1); }
+.expense-exception-return { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 10px 14px; border: 1px solid #cfe0fa; border-radius: 12px; background: #f3f8ff; color: #31577d; font-size: 13px; font-weight: 700; }
+.expense-exception-return .outline { flex: 0 0 auto; }
+.payroll-readonly-note { display: inline-flex; align-items: center; gap: 10px; color: #5b6675; font-size: 13px; font-weight: 700; }
 .expense-workspace > .card:last-child { margin-bottom: 0; }
 
 @media(max-width:760px) {

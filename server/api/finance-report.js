@@ -128,7 +128,7 @@ export function buildCloseoutCompleteness({ expenses = [], unresolvedReceipts = 
   };
 }
 
-async function reportData(organizationId, from, to) {
+export async function reportData(organizationId, from, to) {
   const monthFrom = `${from.slice(0, 7)}-01`; const monthTo = `${to.slice(0, 7)}-${String(monthDays(to)).padStart(2, '0')}`;
   const [salesRows, expenses, payrollDrafts, unresolvedDocuments, attendanceRecords, unresolvedCardRows, unhealthyConnections, settingsRows] = await Promise.all([
     financeRest(`timefit_user_tossplace_daily_sales?organization_id=eq.${encodeURIComponent(organizationId)}&sales_date=gte.${from}&sales_date=lte.${to}&select=sales_date,completed_amount,completed_order_count`),
@@ -154,7 +154,7 @@ export default async function handler(req, res) {
   const { organizationId, from, to } = source;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(to || '') || from > to || daysBetween(from, to) > 370) return res.status(400).json({ ok: false, error: '조회 기간은 최대 370일 이내로 선택해 주세요.' });
   const periodType = ['daily','weekly','monthly','annual'].includes(source.periodType) ? source.periodType : 'monthly';
-  const auth = await authorizeFinance(req, organizationId, { ownerOnly: req.method === 'POST' });
+  const auth = await authorizeFinance(req, organizationId, { ownerOnly: req.method === 'POST', permissionsAny: req.method === 'GET' ? ['finance.view', 'expense.manage'] : [] });
   if (!auth) return res.status(req.headers.authorization ? 403 : 401).json({ ok: false, error: req.method === 'POST' ? '결산 저장은 사업장 소유자만 할 수 있습니다.' : '관리자 인증이 필요합니다.' });
   try {
     const report = await reportData(organizationId, from, to);

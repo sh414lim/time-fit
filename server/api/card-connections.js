@@ -22,7 +22,7 @@ export default async function handler(req, res) {
   if (!['GET','POST','DELETE'].includes(req.method)) return methodNotAllowed(res);
   if (!financeServerConfigured()) return res.status(503).json({ ok: false, error: '금융 연결 서버 설정이 필요합니다.' });
   const organizationId = req.method === 'GET' ? req.query.organizationId : req.body?.organizationId;
-  const auth = await authorizeFinance(req, organizationId, { ownerOnly: req.method !== 'GET' });
+  const auth = await authorizeFinance(req, organizationId, { ownerOnly: req.method !== 'GET', permissionsAny: req.method === 'GET' ? ['finance.view', 'expense.manage'] : [] });
   if (!auth) return res.status(req.headers.authorization ? 403 : 401).json({ ok: false, error: req.method === 'GET' ? '관리자 인증이 필요합니다.' : '조직 소유자만 카드 연결을 변경할 수 있습니다.' });
   try {
     if (req.method === 'GET') {

@@ -23,7 +23,7 @@ export default async function handler(req, res) {
   if (!['GET','POST','PATCH'].includes(req.method)) return methodNotAllowed(res);
   if (!financeServerConfigured()) return res.status(503).json({ ok: false, error: '금융 처리 서버 설정이 필요합니다.' });
   const organizationId = req.method === 'GET' ? req.query?.organizationId : req.body?.organizationId;
-  const auth = await authorizeFinance(req, organizationId);
+  const auth = await authorizeFinance(req, organizationId, { permissionsAny: req.method === 'GET' ? ['finance.view', 'expense.manage'] : ['expense.manage'] });
   if (!auth) return res.status(req.headers.authorization ? 403 : 401).json({ ok: false, error: '관리자 인증이 필요합니다.' });
 
   try {

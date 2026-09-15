@@ -24,6 +24,8 @@ import { costRate, financeCostOverview } from '../src/features/finance/financeCo
 import { normalizeHyphenCards, normalizeHyphenEvents } from '../server/api/providers/hyphen-card-provider.js';
 import { codefBaseUrl, normalizeCodefBankAccounts, normalizeCodefBankTransactions, normalizeCodefCards, normalizeCodefEvents, normalizeCodefPurchases } from '../server/api/providers/codef-card-provider.js';
 import { cardRetryPlan, cardSyncErrorCategory, cardSyncWindow } from '../server/api/_card-sync-runner.js';
+import { authorizeFinance } from '../server/api/_finance-server.js';
+import salesLaborSummary from '../server/api/sales-labor-summary.js';
 
 test('손익 브리지는 매출에서 운영지출과 인건비를 차감하며 적자도 유지한다', () => {
   const positive = buildProfitBridge({ netSales: 100000, operatingExpenses: 27000, laborCost: 32000 });
@@ -62,6 +64,38 @@ const configure = () => {
   process.env.SUPABASE_URL = 'https://supabase.test';
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-test';
 };
+
+test('부서 관리자 금융·매출 API는 부여된 기능 권한만 허용한다', async () => {
+  configure();
+  const originalFetch = global.fetch;
+  global.fetch = async url => {
+    const path = String(url);
+    if (path.includes('/auth/v1/user')) return jsonResponse({ id: 'manager-user' });
+    if (path.includes('timefit_user_organizations')) return jsonResponse([{ id: 'org', owner_id: 'owner-user' }]);
+    if (path.includes('timefit_user_memberships')) return jsonResponse([{ organization_id: 'org' }]);
+    if (path.includes('timefit_user_management_accounts')) return jsonResponse([{ id: 'account' }]);
+    if (path.includes('timefit_user_management_permissions')) return jsonResponse(path.includes('sales.view') ? [{ permission_code: 'sales.view' }] : []);
+    return jsonResponse([]);
+  };
+  try {
+    const req = { headers: { authorization: 'Bearer user-token' } };
+    assert.ok(await authorizeFinance(req, 'org', { permissionsAny: ['sales.view'] }));
+    assert.equal(await authorizeFinance(req, 'org', { permissionsAny: ['sales.sync'] }), null);
+    assert.equal(await authorizeFinance(req, 'org', { ownerOnly: true }), null);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('인건비 합계 API는 로그인과 조회 기간을 먼저 검증한다', async () => {
+  configure();
+  const missingSession = responseRecorder();
+  await salesLaborSummary({ method: 'GET', headers: {}, query: { organizationId: 'org', from: '2026-09-01', to: '2026-09-30' } }, missingSession);
+  assert.equal(missingSession.statusCode, 401);
+  const invalidDate = responseRecorder();
+  await salesLaborSummary({ method: 'GET', headers: {}, query: { organizationId: 'org', from: '2026-09-30', to: '2026-09-01' } }, invalidDate);
+  assert.equal(invalidDate.statusCode, 400);
+});
 
 test('카드 연결 API는 로그인하지 않은 요청을 차단한다', async () => {
   configure();
@@ -400,6 +434,17 @@ test('버터빌라 손익 기준으로 구매비·카드수수료·매출연동 
   assert.equal(report.totals.operatingExpenses, 452000);
   assert.equal(report.totals.averageOrderValue, 25000);
   assert.equal(report.totals.operatingProfit, 548000);
+});
+
+test('사업장 카드수수료율 변경은 카드수수료와 운영순익에 반영된다', () => {
+  const input = { from: '2026-09-01', to: '2026-09-01', revenueRentRate: 0,
+    salesRows: [{ sales_date: '2026-09-01', completed_amount: 1000000, completed_order_count: 10 }] };
+  const before = buildFinanceReport({ ...input, cardFeeRate: 0.022 });
+  const after = buildFinanceReport({ ...input, cardFeeRate: 0.0225 });
+  assert.equal(before.totals.cardFees, 22000);
+  assert.equal(after.totals.cardFees, 22500);
+  assert.equal(after.totals.operatingProfit, before.totals.operatingProfit - 500);
+  assert.equal(after.assumptions.cardFeeRate, 0.0225);
 });
 
 test('오늘 이후 날짜는 완료 영업일 평균과 실제 변동지출률로 예상 손익을 분리한다', () => {

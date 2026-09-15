@@ -29,7 +29,7 @@ export default async function handler(req, res) {
   const requestedOrganizationId = req.body?.organizationId;
   if (req.method === 'GET' && !authorized(req)) return res.status(401).json({ ok: false, error: 'Unauthorized' });
   if (!financeServerConfigured()) return res.status(503).json({ ok: false, error: 'Missing server configuration' });
-  if (req.method === 'POST' && !await authorizeFinance(req, requestedOrganizationId)) return res.status(req.headers.authorization ? 403 : 401).json({ ok: false, error: '관리자 인증이 필요합니다.' });
+  if (req.method === 'POST' && !await authorizeFinance(req, requestedOrganizationId, { permissionsAny: ['expense.manage'] })) return res.status(req.headers.authorization ? 403 : 401).json({ ok: false, error: '관리자 인증이 필요합니다.' });
   try {
     const now = new Date();
     const organizationFilter = requestedOrganizationId ? `&organization_id=eq.${encodeURIComponent(requestedOrganizationId)}` : '';

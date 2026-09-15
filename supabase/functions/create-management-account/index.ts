@@ -2,7 +2,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const headers = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Content-Type': 'application/json' }
 const loginEmail = (loginId: string) => `${loginId.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '')}@accounts.timefit.local`
-const permissionCodes = new Set(['dashboard.view','attendance.view','schedule.view','schedule.manage','leave.view','leave.review','payroll.view','employee.view','finance.view','expense.manage','settings.manage'])
+const permissionCodes = new Set(['dashboard.view','attendance.view','schedule.view','schedule.manage','leave.view','leave.review','payroll.view','employee.view','finance.view','expense.manage','sales.view','sales.sync','settings.manage'])
 
 Deno.serve(async request => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers })

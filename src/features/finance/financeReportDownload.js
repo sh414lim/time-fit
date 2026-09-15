@@ -118,7 +118,7 @@ export async function downloadFinanceReportXlsx({ report, periodType }) {
     ['confirmedExpenses', '증빙 확정 지출', '지출 원장'],
     ['provisionalCardExpenses', '미증빙 카드 지출', '잠정 반영 · 확정 후 중복 제외'],
     ['forecastExpenses', '미래 예상 변동지출', '실적 변동지출률 적용'],
-    ['cardFees', '카드수수료', `매출 × ${(Number(report.assumptions?.cardFeeRate || 0) * 100).toFixed(1)}%`],
+    ['cardFees', '카드수수료', `매출 × ${(Number(report.assumptions?.cardFeeRate || 0) * 100).toFixed(2)}%`],
     ['rentExpense', '매출연동 임대료', `매출 × ${(Number(report.assumptions?.revenueRentRate || 0) * 100).toFixed(1)}%`],
     ['calculatedExpenses', '자동 계산 비용', '카드수수료 + 매출연동 임대료'],
     ['operatingExpenses', '운영지출', '확정 + 미증빙 카드 + 미래 예상 + 자동 계산'],

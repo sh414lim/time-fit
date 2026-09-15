@@ -1,4 +1,5 @@
 import { decryptSecret } from './_integration-crypto.js';
+import { authorizeFinance } from './_finance-server.js';
 
 const TOSS_API = "https://open-api.tossplace.com/api-public/openapi/v1";
 
@@ -8,15 +9,7 @@ function isAuthorized(req) {
 }
 
 async function authorizeManager(req, organizationId) {
-  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
-  if (!token || !organizationId) return false;
-  const headers = { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${token}` };
-  const userResponse = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, { headers });
-  if (!userResponse.ok) return false;
-  const user = await userResponse.json();
-  const membershipResponse = await fetch(`${process.env.SUPABASE_URL}/rest/v1/timefit_user_memberships?organization_id=eq.${encodeURIComponent(organizationId)}&user_id=eq.${encodeURIComponent(user.id)}&role=eq.manager&select=organization_id`, { headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` } });
-  if (!membershipResponse.ok) return false;
-  return (await membershipResponse.json()).length > 0;
+  return Boolean(await authorizeFinance(req, organizationId, { permissionsAny: ['sales.sync'] }));
 }
 
 function asDate(value) {

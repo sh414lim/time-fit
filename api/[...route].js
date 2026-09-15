@@ -17,6 +17,7 @@ import expenses from '../server/api/expenses.js';
 import financeReport from '../server/api/finance-report.js';
 import menuSalesDashboard from '../server/api/menu-sales-dashboard.js';
 import organizationSalesDashboard from '../server/api/organization-sales-dashboard.js';
+import salesLaborSummary from '../server/api/sales-labor-summary.js';
 import payrollNotifications from '../server/api/payroll-notifications.js';
 import receiptProcess from '../server/api/receipt-process.js';
 import salesDashboard from '../server/api/sales-dashboard.js';
@@ -47,6 +48,7 @@ const handlers = {
   'finance-report': financeReport,
   'menu-sales-dashboard': menuSalesDashboard,
   'organization-sales-dashboard': organizationSalesDashboard,
+  'sales-labor-summary': salesLaborSummary,
   'payroll-notifications': payrollNotifications,
   'receipt-process': receiptProcess,
   'sales-dashboard': salesDashboard,

@@ -20,6 +20,12 @@ async function cachedFinanceRead(path, query, { force = false } = {}) {
   const request = cardConnectionRequest(path, { query }).then(data => { financeReadCache.set(key, { data, cachedAt: Date.now() }); return data; }).finally(() => financeReadInFlight.delete(key));
   financeReadInFlight.set(key, request); return request;
 }
+export function invalidateFinanceReportCache(organizationId) {
+  const organizationKey = `organizationId=${String(organizationId)}`;
+  for (const key of financeReadCache.keys()) {
+    if (key.startsWith('finance-report?') && key.includes(organizationKey)) financeReadCache.delete(key);
+  }
+}
 
 // A stalled network request must never leave the application behind an
 // indefinite full-screen loader. Keep the timeout here so auth and workforce
@@ -138,7 +144,7 @@ export async function acceptEmployeeInvitation(invitationId) {
 
 const requireClient = () => { if (!supabase) throw new Error('Supabase 연결 정보가 없습니다.'); return supabase; };
 
-export async function loadWorkforce(organizationId) {
+export async function loadWorkforce(organizationId, { payrollScope = false } = {}) {
   const client = requireClient();
   const context = await getAuthContext();
   const canViewPayroll = Boolean(context.isOrganizationOwner || context.managementAccount?.permissions?.includes('payroll.view'));
@@ -163,7 +169,10 @@ export async function loadWorkforce(organizationId) {
   const categories = categoriesResult.data ?? [];
   const categoryById = Object.fromEntries(categories.map(item => [item.id, item]));
   const personalOrder = new Map((staffOrderResult.data ?? []).map(item => [item.staff_id, Number(item.sort_order)]));
-  const staffRows = [...(staffResult.data ?? [])].sort((a, b) => {
+  const categoryScopes = context.managementAccount?.categoryScopes || [];
+  const visibleStaff = payrollScope || !categoryScopes.length ? staffResult.data ?? [] : (staffResult.data ?? []).filter(item => categoryScopes.includes(item.category_id));
+  const visibleStaffIds = new Set(visibleStaff.map(item => item.id));
+  const staffRows = [...visibleStaff].sort((a, b) => {
     const aHasOrder = personalOrder.has(a.id); const bHasOrder = personalOrder.has(b.id);
     if (aHasOrder !== bHasOrder) return aHasOrder ? -1 : 1;
     return (personalOrder.get(a.id) ?? Number(a.sort_order) ?? 0) - (personalOrder.get(b.id) ?? Number(b.sort_order) ?? 0);
@@ -174,7 +183,8 @@ export async function loadWorkforce(organizationId) {
     : { data: [], error: null };
   if (signedAvatarUrls.error) throw signedAvatarUrls.error;
   const avatarUrlByPath = Object.fromEntries((signedAvatarUrls.data ?? []).filter(item => item?.path && item?.signedUrl).map(item => [item.path, item.signedUrl]));
-  return { staff: staffRows.map(item => ({ ...item, avatar_url: item.avatar_path ? avatarUrlByPath[item.avatar_path] || null : null, account: accounts[item.user_id], category: categoryById[item.category_id] || null })), schedules: scheduleResult.data ?? [], leaves: leaveResult.data ?? [], attendance: attendanceResult.data ?? [], settings: settingsResult.data, leaveGrants: grantsResult.data ?? [], categories };
+  const visibleRows = rows => payrollScope || !categoryScopes.length ? rows ?? [] : (rows ?? []).filter(item => visibleStaffIds.has(item.staff_id));
+  return { staff: staffRows.map(item => ({ ...item, avatar_url: item.avatar_path ? avatarUrlByPath[item.avatar_path] || null : null, account: accounts[item.user_id], category: categoryById[item.category_id] || null })), schedules: visibleRows(scheduleResult.data), leaves: visibleRows(leaveResult.data), attendance: visibleRows(attendanceResult.data), settings: settingsResult.data, leaveGrants: visibleRows(grantsResult.data), categories };
 }
 
 export async function loadStaffCategories(organizationId) {
@@ -287,6 +297,13 @@ export async function saveOrganizationSettings(settings) {
   const { data, error } = await requireClient().from('timefit_user_organization_settings').upsert(settings, { onConflict: 'organization_id' }).select().single();
   if (error) throw error; return data;
 }
+export async function updateOrganizationCardFeeRate(organizationId, rate) {
+  const { data, error } = await requireClient().from('timefit_user_organization_settings')
+    .update({ corporate_card_fee_rate: rate }).eq('organization_id', organizationId)
+    .select('corporate_card_fee_rate').single();
+  if (error) throw error;
+  return data;
+}
 export async function getTossPlaceConnection(organizationId) {
   const { data, error } = await requireClient().from('timefit_user_tossplace_connections').select('id,organization_id,display_name,service_id,service_code,merchant_id,sync_enabled,connection_status,credential_source,last_synced_at,last_error,created_at,updated_at').eq('organization_id', organizationId).maybeSingle();
   if (error) throw error; return data;
@@ -357,6 +374,15 @@ export async function loadOrganizationSalesDashboard(organizationId, filters = {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || '매출 데이터를 불러오지 못했습니다.');
   rememberSalesDashboard(cacheKey, { data: body, cachedAt: Date.now() });
+  return body;
+}
+export async function loadSalesLaborSummary(organizationId, { from, to }) {
+  const client = requireClient(); const { data: { session } } = await client.auth.getSession();
+  if (!session?.access_token) throw new Error('로그인이 필요합니다.');
+  const query = new URLSearchParams({ organizationId, from, to });
+  const response = await fetch(`/api/sales-labor-summary?${query}`, { headers: { Authorization: `Bearer ${session.access_token}` } });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || '인건비 합계를 불러오지 못했습니다.');
   return body;
 }
 export async function syncOrganizationSales(organizationId, options = {}) {
