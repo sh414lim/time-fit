@@ -1,3 +1,5 @@
+import { financeCostOverview } from './financeCostOverview';
+
 const won = value => `${Math.round(Number(value) || 0).toLocaleString('ko-KR')}원`;
 const filePeriod = report => `${report.from}_${report.to}`;
 const reportRows = report => report?.displaySeries || report?.series || [];
@@ -37,16 +39,18 @@ function profitChartDataUrl(rows, width = 1200, height = 420) {
   context.fillText('0', padding.left - 12, zeroY + 8);
   context.fillText(`-${won(max)}`, padding.left - 12, height - padding.bottom + 8);
   if (rows.length) {
-    context.strokeStyle = '#2f80ed';
-    context.lineWidth = 5;
-    context.lineJoin = 'round';
-    context.beginPath();
-    rows.forEach((row, index) => {
-      const x = padding.left + (rows.length === 1 ? plotWidth / 2 : index * plotWidth / (rows.length - 1));
-      const y = zeroY - Number(row.operatingProfit || 0) / max * (plotHeight / 2);
-      if (index) context.lineTo(x, y); else context.moveTo(x, y);
-    });
-    context.stroke();
+    const points = rows.map((row, index) => ({ x: padding.left + (rows.length === 1 ? plotWidth / 2 : index * plotWidth / (rows.length - 1)), y: zeroY - Number(row.operatingProfit || 0) / max * (plotHeight / 2) }));
+    const firstForecast = rows.findIndex(row => row.dataStatus === 'forecast');
+    const line = (part, color, dashed = false) => {
+      if (part.length < 2) return;
+      context.strokeStyle = color; context.lineWidth = 5; context.lineJoin = 'round'; context.setLineDash(dashed ? [12, 8] : []); context.beginPath();
+      part.forEach((point, index) => index ? context.lineTo(point.x, point.y) : context.moveTo(point.x, point.y));
+      context.stroke(); context.setLineDash([]);
+    };
+    line(firstForecast < 0 ? points : points.slice(0, firstForecast), '#2f80ed');
+    if (firstForecast >= 0) line(points.slice(Math.max(0, firstForecast - 1)), '#8b5cf6', true);
+    context.fillStyle = '#475569'; context.font = '18px sans-serif'; context.textAlign = 'right';
+    context.fillText(firstForecast >= 0 ? '실적 —   예상 - - -' : '실적 —', width - padding.right, padding.top + 12);
     context.fillStyle = '#334155';
     context.font = '22px sans-serif';
     context.textAlign = 'left';
@@ -90,9 +94,59 @@ export async function downloadFinanceReportXlsx({ report, periodType }) {
   summary.addRow(['증빙률', (report.completeness?.evidenceRate || 0) / 100, '미대사 카드', report.completeness?.unresolvedCardTransactions || 0, '결산 상태', report.audit?.status === 'closed' ? '확정' : '미확정 미리보기']);
   ['B8','D8'].forEach(cell => { summary.getCell(cell).numFmt = '#,##0"원";[Red]-#,##0"원"'; });
   summary.getCell('B9').numFmt = '0.0%';
+  summary.getCell('A10').value = '재고 실사용 원가·홀/주방 인건비 분리 미연동 · 실적과 예상은 비용 대사 시 구분';
+  summary.mergeCells('A10:F10');
+  summary.getCell('A10').font = { size: 10, color: { argb: 'FF9A6700' } };
   const rows = reportRows(report);
   const chartImage = workbook.addImage({ base64: profitChartDataUrl(rows), extension: 'png' });
   summary.addImage(chartImage, { tl: { col: 0, row: 10 }, ext: { width: 900, height: 315 } });
+  const cost = workbook.addWorksheet('비용·인건비', { views: [{ state: 'frozen', ySplit: 4, showGridLines: false }] });
+  cost.columns = [{ width: 30 }, { width: 20 }, { width: 20 }, { width: 20 }, { width: 20 }, { width: 18 }, { width: 31 }];
+  cost.addRow(['손익 구성 · 같은 기간과 같은 산식']);
+  cost.mergeCells('A1:G1');
+  cost.getCell('A1').font = { size: 17, bold: true, color: { argb: 'FF172033' } };
+  cost.addRow([`${report.from} ~ ${report.to} · 실적 기준 ${report.asOfDate || report.to}`]);
+  cost.mergeCells('A2:G2');
+  cost.getCell('A2').font = { color: { argb: 'FF64748B' } };
+  cost.addRow([]);
+  cost.addRow(['항목', '현재 실적', '미래 예상', '기간 합계', '보고서 합계', '차이', '산정 기준']);
+  const costItems = [
+    ['netSales', '순매출', '완료 주문 매출 / 요일별 예상'],
+    ['kitchenPurchases', '주방 구매비', '분류된 확정 지출만'],
+    ['hallPurchases', '홀 구매비', '분류된 확정 지출만'],
+    ['otherExpenses', '기타 확정 지출', '주방·홀 제외 확정 지출'],
+    ['confirmedExpenses', '증빙 확정 지출', '지출 원장'],
+    ['provisionalCardExpenses', '미증빙 카드 지출', '잠정 반영 · 확정 후 중복 제외'],
+    ['forecastExpenses', '미래 예상 변동지출', '실적 변동지출률 적용'],
+    ['cardFees', '카드수수료', `매출 × ${(Number(report.assumptions?.cardFeeRate || 0) * 100).toFixed(1)}%`],
+    ['rentExpense', '매출연동 임대료', `매출 × ${(Number(report.assumptions?.revenueRentRate || 0) * 100).toFixed(1)}%`],
+    ['calculatedExpenses', '자동 계산 비용', '카드수수료 + 매출연동 임대료'],
+    ['operatingExpenses', '운영지출', '확정 + 미증빙 카드 + 미래 예상 + 자동 계산'],
+    ['laborCost', '총 인건비', '급여 초안의 기간 배분'],
+    ['operatingProfit', '운영순익', '순매출 − 운영지출 − 인건비'],
+  ];
+  costItems.forEach(([key, label, basis]) => {
+    const index = cost.lastRow.number + 1;
+    const row = cost.addRow([label, Number((report.actualTotals || report.totals)?.[key] || 0), Number(report.forecastTotals?.[key] || 0), null, Number(report.totals?.[key] || 0), null, basis]);
+    row.getCell(4).value = { formula: `B${index}+C${index}`, result: Number(report.totals?.[key] || 0) };
+    row.getCell(6).value = { formula: `D${index}-E${index}`, result: 0 };
+  });
+  const rateStart = cost.lastRow.number + 2;
+  cost.getCell(`A${rateStart}`).value = '매출 대비 코스트율';
+  cost.getCell(`A${rateStart}`).font = { bold: true, color: { argb: 'FF26364D' } };
+  const rateRows = [];
+  financeCostOverview(report.totals, report.actualTotals || report.totals).forEach(item => {
+    const row = cost.addRow([`${item.label} 코스트`, null, null, null, item.rate, null, item.basis]);
+    rateRows.push(row.number);
+  });
+  cost.addRow(['연결 범위', '재고 실사용 원가', '미연동', '홀·주방 인건비', '미분리', '', '누락 항목을 0원으로 해석하지 마세요']);
+  cost.getRow(4).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  cost.getRow(4).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF26364D' } };
+  cost.getRow(4).alignment = { horizontal: 'center' };
+  [2,3,4,5,6].forEach(column => { cost.getColumn(column).numFmt = '#,##0"원";[Red]-#,##0"원"'; });
+  rateRows.forEach(index => { cost.getCell(`E${index}`).numFmt = '0.0%'; });
+  cost.getColumn(7).alignment = { wrapText: true, vertical: 'middle' };
+  cost.eachRow((row, index) => { if (index > 4 && index % 2 === 0) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }; if (index > 3) row.height = 24; });
   const detail = workbook.addWorksheet('기간별 손익', { views: [{ state: 'frozen', ySplit: 1 }] });
   detail.columns = [
     { header: '기간', key: 'date', width: 16 }, { header: '구분', key: 'status', width: 12 }, { header: '순매출', key: 'sales', width: 18 },

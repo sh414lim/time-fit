@@ -20,6 +20,7 @@ import expenseDetail from '../server/api/expense-detail.js';
 import { expenseLedgerCsv } from '../src/features/finance/expenseExport.js';
 import { financeReportCsvRows } from '../src/features/finance/financeReportExport.js';
 import { buildProfitBridge } from '../src/features/finance/profitBridgeModel.js';
+import { costRate, financeCostOverview } from '../src/features/finance/financeCostOverview.js';
 import { normalizeHyphenCards, normalizeHyphenEvents } from '../server/api/providers/hyphen-card-provider.js';
 import { codefBaseUrl, normalizeCodefBankAccounts, normalizeCodefBankTransactions, normalizeCodefCards, normalizeCodefEvents, normalizeCodefPurchases } from '../server/api/providers/codef-card-provider.js';
 import { cardRetryPlan, cardSyncErrorCategory, cardSyncWindow } from '../server/api/_card-sync-runner.js';
@@ -32,6 +33,16 @@ test('손익 브리지는 매출에서 운영지출과 인건비를 차감하며
   assert.equal(negative.profit, -15000);
   assert.equal(negative.scale, 25000);
   assert.equal(buildProfitBridge({}).scale, 1);
+});
+
+test('엑셀 기준 구매비·인건비 코스트율은 같은 순매출 분모를 사용한다', () => {
+  const overview = financeCostOverview({ netSales: 100000, kitchenPurchases: 20000, hallPurchases: 5000, laborCost: 30000, operatingExpenses: 27000 });
+  assert.deepEqual(overview.map(item => item.rate), [0.2, 0.05, 0.3, 0.27]);
+  assert.equal(costRate(1000, 0), null);
+  assert.equal(costRate(0, 100000), 0);
+  const projected = financeCostOverview({ netSales: 200000, kitchenPurchases: 20000, laborCost: 60000 }, { netSales: 100000, kitchenPurchases: 20000 });
+  assert.equal(projected[0].rate, 0.2);
+  assert.equal(projected[2].rate, 0.3);
 });
 
 function responseRecorder() {
