@@ -388,12 +388,15 @@ test('오늘 이후 날짜는 완료 영업일 평균과 실제 변동지출률�
       { sales_date: '2026-09-02', completed_amount: 50000, completed_order_count: 5 },
     ],
     expenses: [{ transaction_date: '2026-09-01', total_amount: 20000, category: '재료비' }],
+    payrollDrafts: [{ id: 'draft-current', settlement_month: '2026-09-01' }],
+    payrollLines: [{ payroll_draft_id: 'draft-current', staff_id: 'staff-1', pay_type: 'monthly', estimated_total: 300000 }],
   });
   assert.equal(report.hasForecast, true);
   assert.equal(report.actualTotals.netSales, 150000);
   assert.equal(report.forecastTotals.netSales, 100000);
   assert.equal(report.series[1].dataStatus, 'in_progress');
-  assert.deepEqual({ status: report.series[2].dataStatus, sales: report.series[2].sales, forecastExpenses: report.series[2].forecastExpenses, cardFees: report.series[2].cardFees, profit: report.series[2].operatingProfit }, { status: 'forecast', sales: 100000, forecastExpenses: 20000, cardFees: 10000, profit: 70000 });
+  assert.equal(report.actualTotals.laborCost, 20000);
+  assert.deepEqual({ status: report.series[2].dataStatus, sales: report.series[2].sales, forecastExpenses: report.series[2].forecastExpenses, cardFees: report.series[2].cardFees, labor: report.series[2].laborCost, profit: report.series[2].operatingProfit }, { status: 'forecast', sales: 100000, forecastExpenses: 20000, cardFees: 10000, labor: 10000, profit: 60000 });
   assert.equal(report.forecast.variableExpenseRate, 20);
 });
 

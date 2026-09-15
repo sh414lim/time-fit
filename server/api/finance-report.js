@@ -79,7 +79,8 @@ export function buildFinanceReport({ from, to, salesRows = [], expenses = [], un
     const cardFees = Math.round(sales * Number(cardFeeRate || 0)); const rentExpense = Math.round(sales * Number(revenueRentRate || 0));
     const calculatedExpenses = cardFees + rentExpense; const operatingExpenses = confirmedExpenses + provisionalCardExpenses + calculatedExpenses;
     const month = date.slice(0, 7); const monthlyLabor = payrollByMonth.get(month) || 0;
-    const laborCost = dailyLabor.has(date) ? dailyLabor.get(date) : Math.round(monthlyLabor / monthDays(date));
+    const isOpenMonth = month >= asOfDate.slice(0, 7);
+    const laborCost = isOpenMonth ? Math.round(monthlyLabor / monthDays(date)) : dailyLabor.has(date) ? dailyLabor.get(date) : Math.round(monthlyLabor / monthDays(date));
     return { date, dataStatus: date === asOfDate ? 'in_progress' : 'actual', sales, orderCount, averageOrderValue: orderCount ? Math.round(sales / orderCount) : null, confirmedExpenses, provisionalCardExpenses, calculatedExpenses, forecastExpenses: 0, kitchenPurchases, hallPurchases, otherExpenses, cardFees, rentExpense, operatingExpenses, laborCost, operatingProfit: sales - operatingExpenses - laborCost };
   });
   const baseline = actualSeries.filter(day => day.date < asOfDate && day.sales > 0);
