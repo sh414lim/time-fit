@@ -17,7 +17,7 @@ async function cachedFinanceRead(path, query, { force = false } = {}) {
   const key = financeCacheKey(path, query); const cached = peekFinanceCache(path, query);
   if (!force && cached?.isFresh) return cached.data;
   if (!force && financeReadInFlight.has(key)) return financeReadInFlight.get(key);
-  const request = cardConnectionRequest(path, { query }).then(data => { financeReadCache.set(key, { data, cachedAt: Date.now() }); return data; }).finally(() => financeReadInFlight.delete(key));
+  const request = cardConnectionRequest(path, { query, force }).then(data => { financeReadCache.set(key, { data, cachedAt: Date.now() }); return data; }).finally(() => financeReadInFlight.delete(key));
   financeReadInFlight.set(key, request); return request;
 }
 export function invalidateFinanceReportCache(organizationId) {
@@ -370,7 +370,7 @@ export async function loadOrganizationSalesDashboard(organizationId, filters = {
   const client = requireClient(); const { data: { session } } = await client.auth.getSession();
   if (!session?.access_token) throw new Error('로그인이 필요합니다.');
   const query = new URLSearchParams({ organizationId, ...(filters.from ? { from: filters.from } : {}), ...(filters.to ? { to: filters.to } : {}) });
-  const response = await fetch(`/api/organization-sales-dashboard?${query}`, { headers: { Authorization: `Bearer ${session.access_token}` } });
+  const response = await fetch(`/api/organization-sales-dashboard?${query}`, { cache: force ? 'no-store' : 'default', headers: { Authorization: `Bearer ${session.access_token}` } });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || '매출 데이터를 불러오지 못했습니다.');
   rememberSalesDashboard(cacheKey, { data: body, cachedAt: Date.now() });
@@ -596,13 +596,14 @@ export async function disconnectCorporateCard(id) {
   if (error) throw error; return data;
 }
 
-async function cardConnectionRequest(path, { method = 'GET', query, body } = {}) {
+async function cardConnectionRequest(path, { method = 'GET', query, body, force = false } = {}) {
   const client = requireClient();
   const { data: { session } } = await client.auth.getSession();
   if (!session?.access_token) throw new Error('로그인이 필요합니다.');
   const search = query ? `?${new URLSearchParams(query).toString()}` : '';
   const response = await requestWithTimeout(fetch(`/api/${path}${search}`, {
     method,
+    cache: force ? 'no-store' : 'default',
     headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   }), 'card_connection');

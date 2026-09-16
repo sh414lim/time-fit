@@ -9,7 +9,7 @@ import cardSyncExecute from '../server/api/card-sync-execute.js';
 import cardSyncWorker from '../server/api/card-sync-worker.js';
 import { matchScore, matchingClassificationRule, receiptFingerprint, receiptRetryBlocker, structuredReceipt } from '../server/api/receipt-process.js';
 import expenseReview, { eligibleBulkMatches } from '../server/api/expense-review.js';
-import { buildCloseoutCompleteness, buildDailyLaborMap, buildFinanceReport, compareFinanceReports, groupFinanceSeries, previousFinanceRange } from '../server/api/finance-report.js';
+import { buildCloseoutCompleteness, buildDailyLaborMap, buildFinanceReport, compareFinanceReports, groupFinanceSeries, previousFinanceRange, salesCutoffStatus } from '../server/api/finance-report.js';
 import closeouts from '../server/api/closeouts.js';
 import { mergeReceiptExtractions, validateReceiptExtraction } from '../server/api/_receipt-llm.js';
 import { buildExpenseExceptions } from '../server/api/expense-exceptions.js';
@@ -35,6 +35,18 @@ test('손익 브리지는 매출에서 운영지출과 인건비를 차감하며
   assert.equal(negative.profit, -15000);
   assert.equal(negative.scale, 25000);
   assert.equal(buildProfitBridge({}).scale, 1);
+});
+
+test('당일 매출은 오후 10시 수집 창이 실제로 완료된 경우에만 집계 완료로 표시한다', () => {
+  const input = { from: '2026-09-01', to: '2026-09-30', asOfDate: '2026-09-15' };
+  assert.equal(salesCutoffStatus(input, new Date('2026-09-15T12:59:00Z')).status, 'before_cutoff');
+  assert.equal(salesCutoffStatus(input, new Date('2026-09-15T13:10:00Z')).status, 'overdue');
+  const complete = salesCutoffStatus({ ...input, syncState: {
+    last_successful_sync_at: '2026-09-15T13:05:00Z',
+    last_successful_window_from: '2026-09-13T15:00:00Z',
+    last_successful_window_to: '2026-09-15T13:05:00Z',
+  } }, new Date('2026-09-15T13:10:00Z'));
+  assert.equal(complete.status, 'ready');
 });
 
 test('엑셀 기준 구매비·인건비 코스트율은 같은 순매출 분모를 사용한다', () => {

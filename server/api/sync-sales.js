@@ -27,6 +27,16 @@ export function normalizeSalesSyncRange(from, to) {
   return { from: start.toISOString(), to: end.toISOString() };
 }
 
+export function dailySalesSyncRange(now = new Date()) {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(now);
+  const todayStart = new Date(`${today}T00:00:00+09:00`);
+  const cutoff = new Date(`${today}T22:00:00+09:00`);
+  return {
+    from: new Date(todayStart.getTime() - 86400000).toISOString(),
+    to: new Date(Math.min(now.getTime(), cutoff.getTime())).toISOString(),
+  };
+}
+
 function normalizeOrder(order, merchantId, organizationId) {
   return {
     organization_id: organizationId,
@@ -107,10 +117,11 @@ async function syncConnection({ organizationId, merchantId, page, size, mode, ra
   await saveSyncState({ merchant_id: Number(merchantId), organization_id: organizationId, last_sync_started_at: new Date().toISOString(), last_sync_error: null, updated_at: new Date().toISOString() });
   let currentPage = page;
   let synchronized = 0;
-  for (let batch = 0; batch < (range ? 20 : 1); batch += 1) {
+  const fetchRange = range || (mode === 'daily' ? dailySalesSyncRange() : null);
+  const maxPages = fetchRange ? 20 : 1;
+  for (let batch = 0; batch < maxPages; batch += 1) {
     const params = new URLSearchParams({ page: String(currentPage), size: String(size), sortOrder: 'DESC' });
-    if (range) { params.set('from', range.from); params.set('to', range.to); }
-    else if (mode === 'daily') params.set('from', new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
+    if (fetchRange) { params.set('from', fetchRange.from); params.set('to', fetchRange.to); }
     const response = await fetch(`${TOSS_API}/merchants/${merchantId}/order/orders?${params}`, {
       headers: { 'x-access-key': accessKey, 'x-secret-key': accessSecret, 'Content-Type': 'application/json' },
     });
@@ -125,13 +136,14 @@ async function syncConnection({ organizationId, merchantId, page, size, mode, ra
     const orders = Array.isArray(body.success) ? body.success : (body.success?.items ?? []);
     await upsertOrders(orders.filter(order => order?.id).map(order => normalizeOrder(order, merchantId, organizationId)));
     synchronized += orders.length;
-    if (!range || orders.length < size) break;
+    if (!fetchRange || orders.length < size) break;
+    if (batch === maxPages - 1) throw new Error('Toss Place 주문이 페이지 수집 상한에 도달했습니다. 매출을 완료로 표시하지 않고 기간을 나눠 다시 수집해 주세요.');
     currentPage += 1;
   }
   // Aggregation happens during background sync, never when a manager opens
   // the sales page. This keeps the dashboard read path consistently light.
   await refreshDailySalesSummary(organizationId, merchantId);
-  await saveSyncState({ merchant_id: Number(merchantId), organization_id: organizationId, last_successful_sync_at: new Date().toISOString(), last_sync_started_at: new Date().toISOString(), last_sync_error: null, updated_at: new Date().toISOString() });
+  await saveSyncState({ merchant_id: Number(merchantId), organization_id: organizationId, last_successful_sync_at: new Date().toISOString(), last_successful_window_from: fetchRange?.from || null, last_successful_window_to: fetchRange?.to || null, last_sync_started_at: new Date().toISOString(), last_sync_error: null, updated_at: new Date().toISOString() });
   await fetch(`${process.env.SUPABASE_URL}/rest/v1/timefit_user_tossplace_connections?organization_id=eq.${encodeURIComponent(organizationId)}`, {
     method: 'PATCH', headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
     body: JSON.stringify({ connection_status: 'connected', last_synced_at: new Date().toISOString(), last_error: null }),

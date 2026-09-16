@@ -1058,15 +1058,15 @@ function SalesAnalytics({ organizationId, canSyncSales = false }) {
   }, [organizationId, range.from, range.to]);
   const [menuQuery, setMenuQuery] = useState(''); const [menuCategory, setMenuCategory] = useState('전체'); const [menuSort, setMenuSort] = useState('sales'); const [expandedMenu, setExpandedMenu] = useState('');
   const refresh = ({ force = false } = {}) => {
-    if (!organizationId) return;
+    if (!organizationId) return Promise.resolve();
     const cached = getCachedOrganizationSalesDashboard(organizationId, range);
     if (cached && !force) {
       setData(cached.data); setCachedAt(cached.cachedAt); setError(''); setLoading(false);
-      if (cached.isFresh) return;
+      if (cached.isFresh) return Promise.resolve(cached.data);
     }
     if (cached || data) setRefreshing(true); else setLoading(true);
     setError('');
-    loadOrganizationSalesDashboard(organizationId, range, { force }).then(next => {
+    return loadOrganizationSalesDashboard(organizationId, range, { force }).then(next => {
       setData(next); setCachedAt(Date.now());
     }).catch(nextError => {
       setError(nextError.message || '매출 데이터를 불러오지 못했습니다.');

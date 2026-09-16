@@ -6,6 +6,21 @@ const daysBetween = (from, to) => Math.floor((Date.parse(`${to}T00:00:00Z`) - Da
 const datesInRange = (from, to) => Array.from({ length: daysBetween(from, to) }, (_, index) => new Date(Date.parse(`${from}T00:00:00Z`) + index * 86400000).toISOString().slice(0, 10));
 const monthDays = date => new Date(Number(date.slice(0, 4)), Number(date.slice(5, 7)), 0).getDate();
 
+export function salesCutoffStatus({ from, to, asOfDate, syncState }, now = new Date()) {
+  if (asOfDate < from || asOfDate > to) return null;
+  const dayStart = new Date(`${asOfDate}T00:00:00+09:00`);
+  const cutoff = new Date(`${asOfDate}T22:00:00+09:00`);
+  const covered = Boolean(
+    syncState?.last_successful_sync_at
+    && syncState?.last_successful_window_from
+    && syncState?.last_successful_window_to
+    && new Date(syncState.last_successful_sync_at) >= cutoff
+    && new Date(syncState.last_successful_window_from) <= dayStart
+    && new Date(syncState.last_successful_window_to) >= cutoff
+  );
+  return { date: asOfDate, cutoffAt: cutoff.toISOString(), lastSyncedAt: syncState?.last_successful_sync_at || null, status: now < cutoff ? 'before_cutoff' : covered ? 'ready' : 'overdue' };
+}
+
 export function previousFinanceRange(from, to, periodType = null) {
   if (periodType === 'monthly') {
     const start = new Date(Date.UTC(Number(from.slice(0, 4)), Number(from.slice(5, 7)) - 2, 1));
@@ -130,7 +145,7 @@ export function buildCloseoutCompleteness({ expenses = [], unresolvedReceipts = 
 
 export async function reportData(organizationId, from, to) {
   const monthFrom = `${from.slice(0, 7)}-01`; const monthTo = `${to.slice(0, 7)}-${String(monthDays(to)).padStart(2, '0')}`;
-  const [salesRows, expenses, payrollDrafts, unresolvedDocuments, attendanceRecords, unresolvedCardRows, unhealthyConnections, settingsRows] = await Promise.all([
+  const [salesRows, expenses, payrollDrafts, unresolvedDocuments, attendanceRecords, unresolvedCardRows, unhealthyConnections, settingsRows, salesSyncRows] = await Promise.all([
     financeRest(`timefit_user_tossplace_daily_sales?organization_id=eq.${encodeURIComponent(organizationId)}&sales_date=gte.${from}&sales_date=lte.${to}&select=sales_date,completed_amount,completed_order_count`),
     financeRest(`timefit_user_expenses?organization_id=eq.${encodeURIComponent(organizationId)}&status=eq.confirmed&transaction_date=gte.${from}&transaction_date=lte.${to}&select=id,transaction_date,total_amount,category,sources:timefit_user_expense_sources(source_type)`),
     financeRest(`timefit_user_payroll_drafts?organization_id=eq.${encodeURIComponent(organizationId)}&settlement_month=gte.${from.slice(0,7)}-01&settlement_month=lte.${to.slice(0,7)}-01&select=id,settlement_month,status`),
@@ -139,9 +154,11 @@ export async function reportData(organizationId, from, to) {
     financeRest(`timefit_user_card_transaction_groups?organization_id=eq.${encodeURIComponent(organizationId)}&approved_at=gte.${from}T00:00:00%2B09:00&approved_at=lte.${to}T23:59:59%2B09:00&net_amount=gt.0&reconciliation_status=in.(unreviewed,review_required)&select=id,approved_at,net_amount`),
     financeRest(`timefit_user_card_connections?organization_id=eq.${encodeURIComponent(organizationId)}&status=in.(degraded,reauth_required)&select=id`),
     financeRest(`timefit_user_organization_settings?organization_id=eq.${encodeURIComponent(organizationId)}&select=corporate_card_fee_rate,revenue_rent_rate&limit=1`),
+    financeRest(`tossplace_sync_state?organization_id=eq.${encodeURIComponent(organizationId)}&select=last_successful_sync_at,last_successful_window_from,last_successful_window_to,last_sync_error&order=updated_at.desc&limit=1`),
   ]);
   const payrollLines = payrollDrafts.length ? await financeRest(`timefit_user_payroll_draft_lines?payroll_draft_id=in.(${payrollDrafts.map(item => encodeURIComponent(item.id)).join(',')})&select=payroll_draft_id,staff_id,pay_type,worked_minutes,completed_work_days,estimated_total`) : [];
   const report = buildFinanceReport({ from, to, salesRows, expenses, unreconciledCardTransactions: unresolvedCardRows, payrollDrafts, payrollLines, attendanceRecords, unresolvedReceipts: unresolvedDocuments.length, cardFeeRate: settingsRows[0]?.corporate_card_fee_rate ?? 0.022, revenueRentRate: settingsRows[0]?.revenue_rent_rate ?? 0.15 });
+  report.salesCutoff = salesCutoffStatus({ from, to, asOfDate: report.asOfDate, syncState: salesSyncRows[0] });
   report.completeness = { ...report.completeness, ...buildCloseoutCompleteness({ expenses, unresolvedReceipts: unresolvedDocuments.length, unresolvedCardTransactions: unresolvedCardRows.length, unhealthyConnections: unhealthyConnections.length }) };
   report.completeness.closeoutReady = report.completeness.payrollComplete && report.completeness.reviewComplete && report.completeness.evidenceComplete && report.completeness.cardReconciliationComplete && report.completeness.cardSyncHealthy;
   return report;
