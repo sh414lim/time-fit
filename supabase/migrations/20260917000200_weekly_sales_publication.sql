@@ -17,7 +17,7 @@ declare prior public.timefit_user_tossplace_sales_publication;
 begin
  perform pg_advisory_xact_lock(p_merchant_id);
  if exists(select 1 from timefit_user_tossplace_connections
-   where merchant_id=p_merchant_id and organization_id<>p_organization_id)
+   where merchant_id=p_merchant_id and organization_id<>p_organization_id and sync_enabled)
  or exists(select 1 from tossplace_orders where merchant_id=p_merchant_id and organization_id is distinct from p_organization_id)
  then raise exception 'Merchant ownership conflict'; end if;
  if not exists(select 1 from timefit_user_tossplace_connections

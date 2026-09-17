@@ -3,9 +3,11 @@ do $$ begin create role service_role; exception when duplicate_object then null;
 create table public.timefit_user_organizations(id uuid primary key);
 create table public.timefit_user_tossplace_connections(
  organization_id uuid primary key, merchant_id bigint, sync_enabled boolean default true,
- connection_status text,last_synced_at timestamptz,last_error text);
+ connection_status text,last_synced_at timestamptz,last_error text,
+ credential_source text default 'env',encrypted_access_key text,encrypted_access_secret text);
 \i /workspace/supabase/migrations/20260822000100_tossplace_sales_sync.sql
 alter table public.tossplace_orders add column organization_id uuid;
+alter table public.tossplace_sync_state add column organization_id uuid;
 \i /workspace/supabase/migrations/20260827000100_tossplace_daily_sales_cache.sql
 \i /workspace/supabase/migrations/20260917000200_weekly_sales_publication.sql
 insert into timefit_user_organizations values('10000000-0000-0000-0000-000000000001');

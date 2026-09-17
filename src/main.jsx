@@ -831,7 +831,7 @@ function SalesAnalytics({ organizationId, initialFrom }) {
   const [message, setMessage] = useState('');
   const sync = async () => {
     setBusy(true); setMessage('');
-    try { await syncOrganizationSales(organizationId); setRevision(value => value + 1); setMessage('수집을 요청했습니다. 수집 시각과 기간별 내역을 확인해 주세요.'); }
+    try { const result = await syncOrganizationSales(organizationId); setRevision(value => value + 1); setMessage(result.status === 'completed' ? '수집을 완료했습니다. 최신 매출 내역을 확인해 주세요.' : '수집 중입니다. 다시 동기화하거나 예약 실행 시 중단 지점부터 이어집니다.'); }
     catch (error) { setMessage(error.message || '매출 수집을 요청하지 못했습니다.'); }
     finally { setBusy(false); }
   };
