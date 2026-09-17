@@ -123,19 +123,31 @@ export async function acceptEmployeeInvitation(invitationId) {
 
 const requireClient = () => { if (!supabase) throw new Error('Supabase 연결 정보가 없습니다.'); return supabase; };
 
+// Every page uses a stable order; a full page must never masquerade as a complete history.
+async function allWorkforceRows(queryFactory) {
+  const data = [];
+  for (let offset = 0; offset < 100000; offset += 500) {
+    const result = await queryFactory().range(offset, offset + 499);
+    if (result.error) return result;
+    data.push(...(result.data || []));
+    if ((result.data || []).length < 500) return { data, error: null };
+  }
+  throw new Error('업무 기록이 너무 많습니다. 조회 범위를 확인해 주세요.');
+}
+
 export async function loadWorkforce(organizationId) {
   const client = requireClient();
   const context = await getAuthContext();
   const canViewPayroll = Boolean(context.isOrganizationOwner || context.managementAccount?.permissions?.includes('payroll.view'));
   const staffColumns = `id,user_id,display_name,department,category_id,job_title,joined_on,phone_e164,avatar_path,sort_order${canViewPayroll ? ',pay_type,hourly_wage,daily_wage,monthly_salary,annual_salary' : ''}`;
   const [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult] = await requestWithTimeout(Promise.all([
-    client.from('timefit_user_staff').select(staffColumns).eq('organization_id', organizationId).order('sort_order').order('created_at'),
-    client.from('timefit_user_work_schedules').select('id,staff_id,work_date,starts_at,ends_at,break_minutes,break_starts_at,break_ends_at,shift_name,is_day_off,status,approval_status,submitted_by,submitted_at,reviewed_by,reviewed_at,review_comment').eq('organization_id', organizationId).order('work_date'),
-    client.from('timefit_user_leave_requests').select('id,staff_id,starts_on,ends_on,leave_type,amount,reason,status,review_comment,created_at').eq('organization_id', organizationId).order('created_at', { ascending: false }),
-    client.from('timefit_user_attendance_records').select('id,staff_id,work_date,checked_in_at,checked_out_at,source').eq('organization_id', organizationId).order('work_date', { ascending: false }),
+    allWorkforceRows(() => client.from('timefit_user_staff').select(staffColumns).eq('organization_id', organizationId).order('sort_order').order('created_at').order('id')),
+    allWorkforceRows(() => client.from('timefit_user_work_schedules').select('id,staff_id,work_date,starts_at,ends_at,break_minutes,break_starts_at,break_ends_at,shift_name,is_day_off,status,approval_status,submitted_by,submitted_at,reviewed_by,reviewed_at,review_comment').eq('organization_id', organizationId).order('work_date').order('id')),
+    allWorkforceRows(() => client.from('timefit_user_leave_requests').select('id,staff_id,starts_on,ends_on,leave_type,amount,reason,status,review_comment,created_at').eq('organization_id', organizationId).order('created_at', { ascending: false }).order('id')),
+    allWorkforceRows(() => client.from('timefit_user_attendance_records').select('id,staff_id,work_date,checked_in_at,checked_out_at,source,updated_at').eq('organization_id', organizationId).order('work_date', { ascending: false }).order('id')),
     client.from('timefit_user_organization_settings').select('*').eq('organization_id', organizationId).maybeSingle(),
-    client.from('timefit_user_leave_grants').select('id,staff_id,amount,reason,grant_type,attendance_record_id,granted_at,created_at').eq('organization_id', organizationId).order('granted_at', { ascending: false }),
-    client.from('timefit_user_staff_categories').select('id,name,color,sort_order').eq('organization_id', organizationId).order('sort_order').order('name'),
+    allWorkforceRows(() => client.from('timefit_user_leave_grants').select('id,staff_id,amount,reason,grant_type,attendance_record_id,granted_at,created_at').eq('organization_id', organizationId).order('granted_at', { ascending: false }).order('id')),
+    allWorkforceRows(() => client.from('timefit_user_staff_categories').select('id,name,color,sort_order').eq('organization_id', organizationId).order('sort_order').order('name').order('id')),
   ]), 'workforce_load');
   for (const result of [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult]) if (result.error) throw result.error;
   const userIds = (staffResult.data ?? []).map(item => item.user_id).filter(Boolean);
