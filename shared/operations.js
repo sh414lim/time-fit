@@ -50,15 +50,20 @@ export function weeklySales(orders, daily, range, connection) {
     });
     const completed = orders.filter(order => order.state === 'COMPLETED' && kstDate(order.ordered_at) >= from && kstDate(order.ordered_at) <= to);
     const menus = new Map();
-    for (const order of completed) for (const line of order.raw_order?.lineItems || []) {
+    let menuComplete = true;
+    for (const order of completed) {
+      if (!Array.isArray(order.raw_order?.lineItems) || !order.raw_order.lineItems.length) menuComplete = false;
+    }
+    for (const order of completed) for (const line of (Array.isArray(order.raw_order?.lineItems) ? order.raw_order.lineItems : [])) {
       const quantity = Number(line.quantity), price = Number(line.itemPrice?.priceValue);
-      if (!line.item?.title || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(price) || price <= 0) continue;
+      if (!line.item?.title || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(price) || price < 0) { menuComplete = false; continue; }
+      if (price === 0) continue;
       const name = line.item.title;
       menus.set(name, (menus.get(name) || 0) + quantity);
     }
     const revenue = days.reduce((sum, day) => sum + day.revenue, 0);
     const count = completed.length;
-    return { from, to, days, revenue, orders: count, average: count ? revenue / count : null, menus: [...menus].map(([name, quantity]) => ({ name, quantity })), menuComplete: completed.every(order => Array.isArray(order.raw_order?.lineItems) && order.raw_order.lineItems.length > 0), covered: days.every(day => day.covered) && Date.parse(connection?.last_synced_at) >= Date.parse(`${addDays(to, 1)}T00:00:00+09:00`) };
+    return { from, to, days, revenue, orders: count, average: count ? revenue / count : null, menus: [...menus].map(([name, quantity]) => ({ name, quantity })), menuComplete, covered: !connection?.last_error && days.every(day => day.covered) && Date.parse(connection?.last_synced_at) >= Date.parse(`${addDays(to, 1)}T00:00:00+09:00`) };
   };
   const current = summarize(range.from, range.to), previous = summarize(range.previousFrom, range.previousTo);
   const comparable = current.covered && previous.covered;
@@ -66,4 +71,30 @@ export function weeklySales(orders, daily, range, connection) {
   const menus = current.menus.sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name)).slice(0, 5).map(menu => ({ ...menu, previous: menuComparable ? previous.menus.find(row => row.name === menu.name)?.quantity || 0 : null }));
   delete current.menus; delete previous.menus;
   return { current, previous, comparable, menuComparable, menus, syncedAt: connection?.last_synced_at || null, syncError: Boolean(connection?.last_error), connected: Boolean(connection?.merchant_id) };
+}
+
+export function weeklySalesFromDaily(snapshot, range) {
+  const connection = snapshot?.connection;
+  const complete = Boolean(connection?.merchant_id && !connection.last_error
+    && Date.parse(snapshot?.coveredThrough) >= Date.parse(`${addDays(range.to, 1)}T00:00:00+09:00`));
+  const summarize = (from, to) => {
+    const menus = new Map();
+    let menuComplete = true;
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const date = addDays(from, i);
+      const row = snapshot?.daily?.find(day => day.sales_date === date);
+      if (row && !row.menu_complete) menuComplete = false;
+      for (const menu of row?.menus || []) menus.set(menu.name, (menus.get(menu.name) || 0) + Number(menu.quantity));
+      return { date, revenue: Number(row?.completed_amount || 0), orders: Number(row?.completed_order_count || 0), covered: complete };
+    });
+    const revenue = days.reduce((sum, day) => sum + day.revenue, 0);
+    const orders = days.reduce((sum, day) => sum + day.orders, 0);
+    return { from, to, days, revenue, orders, average: orders ? revenue / orders : null, menuComplete, covered: complete, menus };
+  };
+  const current = summarize(range.from, range.to), previous = summarize(range.previousFrom, range.previousTo);
+  const menuComparable = complete && current.menuComplete && previous.menuComplete;
+  const menus = [...current.menus].map(([name, quantity]) => ({ name, quantity, previous: menuComparable ? previous.menus.get(name) || 0 : null }))
+    .sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name)).slice(0, 5);
+  delete current.menus; delete previous.menus;
+  return { current, previous, comparable: complete, menuComparable, menus, syncedAt: connection?.last_synced_at || null, syncError: Boolean(connection?.last_error), connected: Boolean(connection?.merchant_id) };
 }

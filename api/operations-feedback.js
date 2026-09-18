@@ -1,5 +1,5 @@
 import { authorizeFinance, financeRest, financeServerConfigured } from './_finance-server.js';
-import { addDays, kstDate, lastCompleteWeek, validDate, weeklySales } from '../shared/operations.js';
+import { addDays, kstDate, lastCompleteWeek, validDate, weeklySalesFromDaily } from '../shared/operations.js';
 
 // Never silently truncate a busy store at PostgREST's row limit.
 export async function readAll(path, read = financeRest) {
@@ -14,16 +14,10 @@ export async function readAll(path, read = financeRest) {
 }
 
 export async function loadWeeklyFeedback(organizationId, range) {
-  const org = `organization_id=eq.${encodeURIComponent(organizationId)}`;
-  const connections = await financeRest(`timefit_user_tossplace_connections?${org}&select=merchant_id,last_synced_at,last_error&limit=1`);
-  const connection = connections[0];
-  if (!connection?.merchant_id) return weeklySales([], [], range, null);
-  const merchant = `merchant_id=eq.${encodeURIComponent(connection.merchant_id)}`;
-  const [orders, daily] = await Promise.all([
-    readAll(`tossplace_orders?${org}&${merchant}&ordered_at=gte.${encodeURIComponent(`${range.previousFrom}T00:00:00+09:00`)}&ordered_at=lt.${encodeURIComponent(`${addDays(range.to, 1)}T00:00:00+09:00`)}&select=order_id,ordered_at,state,total_amount,raw_order&order=order_id.asc`),
-    financeRest(`timefit_user_tossplace_daily_sales?${org}&${merchant}&sales_date=gte.${range.previousFrom}&sales_date=lte.${range.to}&select=sales_date,order_count`),
-  ]);
-  return weeklySales(orders, daily, range, connection);
+  const snapshot = await financeRest('rpc/timefit_user_read_weekly_sales', {
+    method: 'POST', body: JSON.stringify({ p_organization_id: organizationId, p_from: range.previousFrom, p_to: range.to }),
+  });
+  return weeklySalesFromDaily(snapshot, range);
 }
 
 export default async function handler(req, res) {

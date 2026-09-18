@@ -119,30 +119,36 @@ test('weekly API rejects open weeks and non-Monday ranges before reading sales',
   assert.equal(seen.some(url => url.includes('tossplace')), false);
 });
 
-test('weekly API scopes every order and cache read by both organization and connected merchant', async t => {
+test('weekly API reads one organization-scoped compact snapshot, never raw orders', async t => {
   process.env.SUPABASE_URL = 'https://test'; process.env.SUPABASE_SERVICE_ROLE_KEY = 'test';
   const f = salesFixture(), seen = [];
-  t.mock.method(globalThis, 'fetch', async url => {
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
     seen.push(url);
     let body;
     if (url.includes('/auth/')) body = { id: 'owner' };
     else if (url.includes('organizations?')) body = [{ id: org, owner_id: 'owner' }];
-    else if (url.includes('connections?')) body = [f.connection];
-    else if (url.includes('daily_sales?')) body = f.daily;
-    else if (url.includes('tossplace_orders?')) body = f.orders;
+    else if (url.includes('rpc/timefit_user_read_weekly_sales')) {
+      assert.deepEqual(JSON.parse(options.body), { p_organization_id: org, p_from: f.range.previousFrom, p_to: f.range.to });
+      body = { connection: f.connection, coveredThrough: f.connection.last_synced_at, daily: f.daily.map((day, i) => ({ ...day, completed_amount: i < 7 ? 100 : 200, completed_order_count: 1, menu_complete: true, menus: [{ name: '메뉴', quantity: i < 7 ? 1 : 2 }] })) };
+    }
     else throw new Error('Unexpected data access');
     return new Response(JSON.stringify(body));
   });
   const res = response();
   await handler({ method: 'GET', headers: { authorization: 'Bearer test' }, query: { organizationId: org, from: f.range.from } }, res);
   assert.equal(res.statusCode, 200); assert.equal(res.body.data.current.revenue, 1400);
-  for (const url of seen.filter(url => /daily_sales\?|tossplace_orders\?/.test(url))) {
-    assert.match(url, new RegExp(`organization_id=eq.${org}`)); assert.match(url, /merchant_id=eq.1/);
-  }
-  const ordersUrl = new URL(seen.find(url => url.includes('tossplace_orders?')));
-  assert.equal(ordersUrl.searchParams.get('ordered_at'), 'gte.2026-08-31T00:00:00+09:00');
-  assert.deepEqual(ordersUrl.searchParams.getAll('ordered_at'), ['gte.2026-08-31T00:00:00+09:00', 'lt.2026-09-14T00:00:00+09:00']);
+  assert.equal(seen.filter(url => url.includes('/rpc/')).length, 1);
+  assert.equal(seen.some(url => url.includes('tossplace_orders?')), false);
   assert.equal(JSON.stringify(res.body).includes('raw_order'), false);
+});
+
+test('sync errors and malformed menu quantities suppress comparisons', () => {
+  const f = salesFixture();
+  assert.equal(weeklySales(f.orders, f.daily, f.range, { ...f.connection, last_error: 'failed' }).comparable, false);
+  f.orders[0].raw_order.lineItems[0].quantity = 'invalid';
+  assert.equal(weeklySales(f.orders, f.daily, f.range, f.connection).menuComparable, false);
+  f.orders[0].raw_order.lineItems = {};
+  assert.equal(weeklySales(f.orders, f.daily, f.range, f.connection).menuComparable, false);
 });
 
 test('source failures return an error, never a successful zero-card result', async t => {
