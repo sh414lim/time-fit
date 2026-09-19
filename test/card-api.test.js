@@ -1,23 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import cardConnections from '../api/card-connections.js';
-import cardConnectionReauth from '../api/card-connection-reauth.js';
-import cardSync from '../api/card-sync.js';
-import cardSyncWorker from '../api/card-sync-worker.js';
-import { matchScore, matchingClassificationRule, receiptFingerprint, receiptRetryBlocker, structuredReceipt } from '../api/receipt-process.js';
-import expenseReview, { eligibleBulkMatches } from '../api/expense-review.js';
-import { buildCloseoutCompleteness, buildDailyLaborMap, buildFinanceReport, compareFinanceReports, groupFinanceSeries, previousFinanceRange } from '../api/finance-report.js';
-import closeouts from '../api/closeouts.js';
-import { mergeReceiptExtractions, validateReceiptExtraction } from '../api/_receipt-llm.js';
-import { buildExpenseExceptions } from '../api/expense-exceptions.js';
-import expenseReminderWorker, { dueReminderNumber } from '../api/expense-reminder-worker.js';
+import cardConnections from '../server/api/card-connections.js';
+import cardConnectionReauth from '../server/api/card-connection-reauth.js';
+import cardSync from '../server/api/card-sync.js';
+import cardSyncWorker from '../server/api/card-sync-worker.js';
+import { matchScore, matchingClassificationRule, receiptFingerprint, receiptRetryBlocker, structuredReceipt } from '../server/api/receipt-process.js';
+import expenseReview, { eligibleBulkMatches } from '../server/api/expense-review.js';
+import { buildCloseoutCompleteness, buildDailyLaborMap, buildFinanceReport, compareFinanceReports, groupFinanceSeries, previousFinanceRange } from '../server/api/finance-report.js';
+import closeouts from '../server/api/closeouts.js';
+import { mergeReceiptExtractions, validateReceiptExtraction } from '../server/api/_receipt-llm.js';
+import { buildExpenseExceptions } from '../server/api/expense-exceptions.js';
+import expenseReminderWorker, { dueReminderNumber } from '../server/api/expense-reminder-worker.js';
 import { analyzeReceiptPixels } from '../src/features/finance/receiptQuality.js';
-import expenses, { summarizeExpenses, validateManualExpense } from '../api/expenses.js';
-import expenseDetail from '../api/expense-detail.js';
+import expenses, { summarizeExpenses, validateManualExpense } from '../server/api/expenses.js';
+import expenseDetail from '../server/api/expense-detail.js';
 import { expenseLedgerCsv } from '../src/features/finance/expenseExport.js';
 import { financeReportCsvRows } from '../src/features/finance/financeReportExport.js';
-import { normalizeHyphenCards, normalizeHyphenEvents } from '../api/providers/hyphen-card-provider.js';
-import { cardRetryPlan, cardSyncErrorCategory, cardSyncWindow } from '../api/_card-sync-runner.js';
+import { normalizeHyphenCards, normalizeHyphenEvents } from '../server/api/providers/hyphen-card-provider.js';
+import { cardRetryPlan, cardSyncErrorCategory, cardSyncWindow } from '../server/api/_card-sync-runner.js';
 
 function responseRecorder() {
   return {
