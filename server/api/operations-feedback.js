@@ -1,5 +1,5 @@
 import { authorizeFinance, financeRest, financeServerConfigured } from './_finance-server.js';
-import { addDays, kstDate, lastCompleteWeek, validDate, weeklySales } from '../shared/operations.js';
+import { addDays, kstDate, lastCompleteWeek, validDate, weeklySales } from '../../shared/operations.js';
 
 // Never silently truncate a busy store at PostgREST's row limit.
 export async function readAll(path, read = financeRest) {

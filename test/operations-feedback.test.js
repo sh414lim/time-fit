@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { addDays, attendanceIssues, changePercent, kstDate, lastCompleteWeek, validDate, validAttendanceCorrection, weeklySales } from '../shared/operations.js';
-import handler, { readAll } from '../api/operations-feedback.js';
+import handler, { readAll } from '../server/api/operations-feedback.js';
 
 test('KST closed weeks cross month/year and never include the ongoing Sunday', () => {
   assert.equal(kstDate('2026-09-13T15:00:00Z'), '2026-09-14');
