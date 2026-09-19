@@ -1,9 +1,10 @@
-import { cardRoutes } from '../server/routes/cards.js';
-import { financeRoutes } from '../server/routes/finance.js';
-import { operationRoutes } from '../server/routes/operations.js';
-import { salesRoutes } from '../server/routes/sales.js';
+import { cardRoutes } from '../../server/routes/cards.js';
+import { financeRoutes } from '../../server/routes/finance.js';
+import { operationRoutes } from '../../server/routes/operations.js';
+import { salesRoutes } from '../../server/routes/sales.js';
 
 const groups = [salesRoutes, financeRoutes, cardRoutes, operationRoutes];
+export const config = { maxDuration: 300 };
 export const handlers = Object.freeze(Object.assign(Object.create(null), ...groups));
 
 export default function handler(req, res) {

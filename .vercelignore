@@ -8,5 +8,6 @@ supabase/
 *.md
 .git/
 
-# Do not upload local Vite output; Vercel builds it from source.
+# Do not upload local build output; Vercel builds it from source.
 dist/
+.next/
