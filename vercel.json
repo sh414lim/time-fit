@@ -1,7 +1,4 @@
 {
-  "functions": {
-    "pages/api/[...route].js": { "maxDuration": 300 }
-  },
   "crons": [
     { "path": "/api/sync-sales", "schedule": "0 13 * * *" },
     { "path": "/api/check-attendance-alerts", "schedule": "0 0 * * *" },
