@@ -147,12 +147,12 @@ async function saveSyncFailure(organizationId, message) {
 export default async function handler(req, res) {
   if (!["GET", "POST"].includes(req.method)) return res.status(405).json({ ok: false, error: "Method not allowed" });
 
-  const required = [process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY];
-  if (required.some(value => !value)) return res.status(503).json({ ok: false, error: "Missing server configuration" });
-
   const requestedOrganizationId = typeof req.query.organizationId === 'string' ? req.query.organizationId : req.body?.organizationId || null;
   const cronRequest = isAuthorized(req);
-  if (!cronRequest && !(req.method === 'POST' && await authorizeManager(req, requestedOrganizationId))) return res.status(401).json({ ok: false, error: '관리자 인증이 필요합니다.' });
+  if (!cronRequest && !(req.method === 'POST' && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY && await authorizeManager(req, requestedOrganizationId))) return res.status(401).json({ ok: false, error: '관리자 인증이 필요합니다.' });
+
+  const required = [process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY];
+  if (required.some(value => !value)) return res.status(503).json({ ok: false, error: "Missing server configuration" });
 
   const page = Math.max(1, Number.parseInt(req.query.page ?? "1", 10) || 1);
   const size = Math.min(500, Math.max(1, Number.parseInt(req.query.size ?? "500", 10) || 500));

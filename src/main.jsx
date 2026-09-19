@@ -1,21 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
-import './styles.css';
-import './modal-fix.css';
-import './modes.css';
-import './mobile.css';
-import './refinement.css';
-import './feedback.css';
-import './navigation.css';
-import './leave-policy.css';
-import './finance.css';
-import './sheet.css';
-import './auth.css';
-import './staff-categories.css';
-import './management-accounts.css';
-import './attendance-management.css';
-import './monthly-schedule-editor.css';
 import { openSchedulePrintView } from './schedulePdf';
 import { OperationsHome, WeeklyFeedback, AttendanceIssueList, CardReviewList } from './features/operations/OperationsFeedback';
 import CardConnectionWizard from './features/finance/CardConnectionWizard';
@@ -1319,4 +1303,6 @@ function App() {
   </div>;
 }
 
-createRoot(document.getElementById('root')).render(window.location.pathname === '/tablet' ? <TabletDeviceApp/> : <App/>);
+export default function TimeFitClient() {
+  return window.location.pathname === '/tablet' ? <TabletDeviceApp/> : <App/>;
+}

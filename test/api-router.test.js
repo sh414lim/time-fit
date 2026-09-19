@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync } from 'node:fs';
-import apiRouter, { handlers } from '../api/[...route].js';
+import apiRouter, { handlers } from '../pages/api/[...route].js';
 import { cardRoutes } from '../server/routes/cards.js';
 import { financeRoutes } from '../server/routes/finance.js';
 import { operationRoutes } from '../server/routes/operations.js';
@@ -14,8 +14,8 @@ const response = () => ({
   send(body) { this.body = body; return this; },
 });
 
-test('Vercel 배포 함수는 단일 통합 라우터뿐이다', () => {
-  assert.deepEqual(readdirSync(new URL('../api/', import.meta.url)), ['[...route].js']);
+test('Next.js API 경로는 단일 통합 라우터뿐이다', () => {
+  assert.deepEqual(readdirSync(new URL('../pages/api/', import.meta.url)), ['[...route].js']);
 });
 
 test('모든 공개 API가 중복 없이 기능별 그룹에 등록되어 있다', () => {
@@ -48,4 +48,10 @@ test('알 수 없는 경로는 404를 반환한다', async () => {
   await apiRouter({ method: 'GET', query: { route: ['not-found'] }, headers: {} }, res);
   assert.equal(res.statusCode, 404);
   assert.equal(res.body.error, 'API route not found');
+});
+
+test('매출 예약 경로는 서버 설정이 없어도 인증 없는 GET을 먼저 거부한다', async () => {
+  const res = response();
+  await apiRouter({ method: 'GET', query: { route: ['sync-sales'] }, headers: {} }, res);
+  assert.equal(res.statusCode, 401);
 });
