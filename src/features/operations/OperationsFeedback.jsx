@@ -19,18 +19,18 @@ function useOperations(organizationId, scope, filters, enabled = true, refreshTo
   useEffect(() => {
     if (!enabled) { setState({ data: null, loading: false, error: '' }); return; }
     const controller = new AbortController();
-    const timeout = setTimeout(() => { controller.abort(); setState({ data: null, loading: false, error: '조회 시간이 초과됐습니다. 다시 시도해 주세요.', identity }); }, 30000);
-    setState({ data: null, loading: true, error: '' });
+    const timeout = setTimeout(() => { controller.abort(); setState(previous => ({ data: previous.identity === identity ? previous.data : null, loading: false, error: '조회 시간이 초과됐습니다. 다시 시도해 주세요.', identity })); }, 30000);
+    setState(previous => ({ data: previous.identity === identity ? previous.data : null, loading: true, error: '', identity }));
     loadOperations(organizationId, scope, JSON.parse(key), controller.signal).then(data => {
       clearTimeout(timeout);
       if (!controller.signal.aborted) setState({ data, loading: false, error: '', identity });
-    }).catch(error => { clearTimeout(timeout); if (!controller.signal.aborted) setState({ data: null, loading: false, error: error.message, identity }); });
+    }).catch(error => { clearTimeout(timeout); if (!controller.signal.aborted) setState(previous => ({ data: previous.identity === identity ? previous.data : null, loading: false, error: error.message, identity })); });
     return () => { clearTimeout(timeout); controller.abort(); };
   }, [organizationId, scope, key, enabled, revision, refreshToken]);
   return { ...(state.identity === identity ? state : { data: null, loading: enabled, error: '' }), refresh: () => setRevision(value => value + 1) };
 }
 function LoadState({ resource, label }) {
-  return resource.loading ? <p className="ops-status" role="status">{label} 불러오는 중…</p> : resource.error ? <div className="ops-status ops-error" role="alert"><span>{resource.error}</span><button className="outline" onClick={resource.refresh}>다시 시도</button></div> : null;
+  return resource.loading ? <p className="ops-status" role="status">{label} 불러오는 중…{resource.data ? ' 마지막 조회분을 표시합니다.' : ''}</p> : resource.error ? <div className="ops-status ops-error" role="alert"><span>{resource.error}{resource.data ? ' 아래는 마지막 정상 조회분입니다.' : ''}</span><button className="outline" onClick={resource.refresh}>다시 시도</button></div> : null;
 }
 function Task({ title, value, description, onClick }) {
   return <button className="ops-task" onClick={onClick}><span><b>{title}</b><small>{description}</small></span><strong>{value}</strong><span aria-hidden="true">›</span></button>;
@@ -44,11 +44,15 @@ export function OperationsHome({ employees, leaves, organizationId, isOwner, can
   const count = type => issues.filter(issue => issue.types.includes(type)).length;
   const openIssues = type => onNavigate('attendance', { issueType: type, from, to });
   const pending = leaves.filter(row => row.status === '승인 대기');
+  const otherAttendanceCount = issues.filter(issue => issue.types.some(type => type !== 'checkout')).length;
+  const hasFinanceTasks = Boolean(finance.data && (finance.data.attendanceChanged || finance.data.cardCount > 0));
+  const hasTasks = (canAttendance && !dataError && issues.length > 0) || (canLeave && !dataError && pending.length > 0) || hasFinanceTasks;
   return <div className="ops-workspace">
     <section className="card ops-card"><div className="ops-heading"><div><p className="ops-eyebrow">매장 운영</p><h2>확인할 일</h2><p>{month} · 근태는 어제까지의 기록</p></div><span className="ops-tag">실제 기록 기준</span></div>
-      {dataError && <p className="ops-warning" role="alert">근태·휴가 데이터를 갱신하지 못해 확인 건수를 표시하지 않습니다. 화면 상단에서 다시 시도해 주세요.</p>}{canAttendance && !dataError && <><Task title="퇴근 기록 누락" value={`${count('checkout')}건`} description="근무가 끝난 기록의 퇴근 시각을 확인해 주세요." onClick={() => openIssues('checkout')}/><details className="ops-more"><summary>다른 근태 확인 항목 · {issues.filter(issue => issue.types.some(type => type !== 'checkout')).length}개 기록</summary><Task title="예정 근무의 출근 기록 없음" value={`${count('absent')}건`} description="승인된 근무 일정과 실제 출근을 대조합니다." onClick={() => openIssues('absent')}/><Task title="근무 일정과 기록 불일치" value={`${count('schedule')}건`} description="승인된 근무가 없거나 휴무일에 출근 기록이 있습니다." onClick={() => openIssues('schedule')}/><p className="ops-note">같은 기록이 여러 항목에 포함될 수 있습니다. 결근·추가 근무로 확정한 수치가 아닙니다.</p></details></>}
-      {isOwner && <><LoadState resource={finance} label="급여·카드 현황"/>{finance.data && <><Task title={`${month} 급여 초안`} value={!finance.data.draft ? '미작성' : finance.data.attendanceChanged ? '재검토' : '저장됨'} description={finance.data.draft ? `${time(finance.data.draft.updated_at)} 저장 · 정산 전 근태와 계약을 확인해 주세요.` : '근태 확인 후 급여 관리에서 초안을 저장하세요.'} onClick={() => onNavigate('payroll', { month })}/><Task title="미검토 카드 내역" value={`${finance.data.cardCount}건`} description={`${month} · ${money(finance.data.cardAmount)} · 확정 지출에 포함되지 않은 검토 대상`} onClick={() => onNavigate('documents', { cardReview: true, month })}/></> }</>}
-      {canLeave && !dataError && <Task title="휴가 승인 대기" value={`${pending.length}건`} description="직원이 제출한 요청을 확인해 주세요." onClick={() => onNavigate('leave')}/>}
+      {dataError && <p className="ops-warning" role="alert">근태·휴가 데이터를 갱신하지 못해 확인 건수를 표시하지 않습니다. 화면 상단에서 다시 시도해 주세요.</p>}{canAttendance && !dataError && <>{count('checkout') > 0 && <Task title="퇴근 기록 누락" value={`${count('checkout')}건`} description="근무가 끝난 기록의 퇴근 시각을 확인해 주세요." onClick={() => openIssues('checkout')}/ >}{otherAttendanceCount > 0 && <details className="ops-more"><summary>다른 근태 확인 항목 · {otherAttendanceCount}개 기록</summary>{count('absent') > 0 && <Task title="예정 근무의 출근 기록 없음" value={`${count('absent')}건`} description="승인된 근무 일정과 실제 출근을 대조합니다." onClick={() => openIssues('absent')}/ >}{count('schedule') > 0 && <Task title="근무 일정과 기록 불일치" value={`${count('schedule')}건`} description="승인된 근무가 없거나 휴무일에 출근 기록이 있습니다." onClick={() => openIssues('schedule')}/ >}<p className="ops-note">같은 기록이 여러 항목에 포함될 수 있습니다. 결근·추가 근무로 확정한 수치가 아닙니다.</p></details>}</>}
+      {isOwner && <><LoadState resource={finance} label="급여·카드 현황"/>{finance.data && <>{finance.data.attendanceChanged && <Task title={`${month} 급여 초안`} value="재검토" description={`${time(finance.data.draft.updated_at)} 저장 · 이후 변경된 근태를 확인하고 초안을 다시 검토해 주세요.`} onClick={() => onNavigate('payroll', { month })}/ >}{finance.data.cardCount > 0 && <Task title="미검토 카드 내역" value={`${finance.data.cardCount}건`} description={`${month} · ${money(finance.data.cardAmount)} · 확정 지출에 포함되지 않은 검토 대상`} onClick={() => onNavigate('documents', { cardReview: true, month })}/ >}</>}</>}
+      {canLeave && !dataError && pending.length > 0 && <Task title="휴가 승인 대기" value={`${pending.length}건`} description="직원이 제출한 요청을 확인해 주세요." onClick={() => onNavigate('leave')}/>}
+      {!hasTasks && !dataError && (canAttendance || canLeave || isOwner) && (!isOwner || (!finance.loading && !finance.error)) && <p className="ops-status">현재 확인할 항목이 없습니다.</p>}
       {!canAttendance && !canLeave && !isOwner && <p className="ops-status">조회 권한이 있는 메뉴에서 업무를 확인해 주세요.</p>}
     </section>
     {isOwner && <WeeklyFeedback organizationId={organizationId} onNavigate={onNavigate}/>}
