@@ -49,3 +49,9 @@ test('알 수 없는 경로는 404를 반환한다', async () => {
   assert.equal(res.statusCode, 404);
   assert.equal(res.body.error, 'API route not found');
 });
+
+test('매출 예약 경로는 서버 설정이 없어도 인증 없는 GET을 먼저 거부한다', async () => {
+  const res = response();
+  await apiRouter({ method: 'GET', query: { route: ['sync-sales'] }, headers: {} }, res);
+  assert.equal(res.statusCode, 401);
+});
