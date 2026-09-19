@@ -1,5 +1,7 @@
 # 기능별 API 통합과 Next.js 라우팅 전환안
 
+> 2026-09-19 구현 현황: 아래 내용은 최초 설계안이다. 후속 브랜치 `codex/nextjs-api-routing`에서는 기존 Node `req`/`res` 계약을 보존하는 Next.js **Pages API Routes**를 채택했다. 공개 `/api/*` 경로와 네 도메인 레지스트리는 유지하고, `pages/api/[...route].js` 한 진입점으로 연결했다. `/`, `/tablet`, `/sales`는 Next.js Pages로 이전했으며 Vite는 제거했다. `next build`에서 동적 API 라우트 1개가 확인됐고, HTTP 스모크 테스트와 58개 단위 테스트를 통과했다. 운영 전환은 Vercel 프리뷰 및 실제 로그인·Cron·웹훅 검증 후에만 진행한다.
+
 ## 결정
 
 현재 Vite 운영 앱을 즉시 Next.js라고 선언하지 않는다. 먼저 PR #3의 Vercel 단일 진입점 아래 API 26개를 **매출·Toss, 지출·결산, 카드, 운영·직원** 4개 도메인 레지스트리로 분리한다. 외부 `/api/*` URL, 요청 메서드, 인증, 응답 및 Cron URL은 유지한다. Next.js 전환은 별도 프리뷰·회귀 테스트를 거치는 후속 단계로 진행한다.
@@ -60,4 +62,4 @@ server/domains/{sales,finance,cards,operations}/...
 
 ## 현재 상태
 
-도메인 레지스트리 분리와 단일 Vercel 함수 구조는 코드에 반영했다. **Next.js 전환 자체는 아직 구현·배포하지 않았다.** Vercel 프리뷰는 `Not authorized`로 차단되어 있다.
+단일 함수 기반 도메인 레지스트리 분리는 PR #3에 반영했다. 후속 브랜치에서 Next.js Pages Router 셸과 Pages API Routes 전환을 구현했다. 클라우드 프리뷰와 운영 배포는 아직 수행하지 않았다. 앞선 Vercel 프리뷰는 `Not authorized`로 차단된 이력이 있으므로 계정 권한을 먼저 확인해야 한다.

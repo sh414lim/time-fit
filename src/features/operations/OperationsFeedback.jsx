@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { addDays, attendanceIssues, changePercent, kstDate, lastCompleteWeek, validAttendanceCorrection } from '../../../shared/operations.js';
 import { correctAttendance, loadOperations } from './operationsApi';
-import './operations.css';
 
 const number = value => Math.round(value).toLocaleString('ko-KR');
 const money = value => `${number(value)}원`;

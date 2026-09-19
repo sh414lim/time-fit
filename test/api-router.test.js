@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync } from 'node:fs';
-import apiRouter, { handlers } from '../api/[...route].js';
+import apiRouter, { handlers } from '../pages/api/[...route].js';
 import { cardRoutes } from '../server/routes/cards.js';
 import { financeRoutes } from '../server/routes/finance.js';
 import { operationRoutes } from '../server/routes/operations.js';
@@ -14,8 +14,8 @@ const response = () => ({
   send(body) { this.body = body; return this; },
 });
 
-test('Vercel 배포 함수는 단일 통합 라우터뿐이다', () => {
-  assert.deepEqual(readdirSync(new URL('../api/', import.meta.url)), ['[...route].js']);
+test('Next.js API 경로는 단일 통합 라우터뿐이다', () => {
+  assert.deepEqual(readdirSync(new URL('../pages/api/', import.meta.url)), ['[...route].js']);
 });
 
 test('모든 공개 API가 중복 없이 기능별 그룹에 등록되어 있다', () => {
