@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { normalizePayrollDraftLine } from '../payrollDraftLine.js';
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -372,12 +373,13 @@ export async function savePayrollContract(contract) {
   if (error) throw error; return data;
 }
 export async function savePayrollDraft({ organizationId, settlementMonth, status = 'draft', lines }) {
+  const normalizedLines = lines.map(normalizePayrollDraftLine);
   const client = requireClient(); const userId = (await client.auth.getUser()).data.user?.id; const month = `${settlementMonth}-01`;
   const { data: draft, error: draftError } = await client.from('timefit_user_payroll_drafts').upsert({ organization_id: organizationId, settlement_month: month, status, updated_by: userId, created_by: userId, updated_at: new Date().toISOString() }, { onConflict: 'organization_id,settlement_month' }).select().single();
   if (draftError) throw draftError;
   const { error: deleteError } = await client.from('timefit_user_payroll_draft_lines').delete().eq('payroll_draft_id', draft.id);
   if (deleteError) throw deleteError;
-  if (lines.length) { const { error: linesError } = await client.from('timefit_user_payroll_draft_lines').insert(lines.map(line => ({ ...line, payroll_draft_id: draft.id }))); if (linesError) throw linesError; }
+  if (normalizedLines.length) { const { error: linesError } = await client.from('timefit_user_payroll_draft_lines').insert(normalizedLines.map(line => ({ ...line, payroll_draft_id: draft.id }))); if (linesError) throw linesError; }
   return draft;
 }
 export async function loadFeedbackItems(organizationId) {
