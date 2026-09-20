@@ -30,7 +30,7 @@ export function groupFinanceSeries(series = [], periodType = 'monthly') {
   return [...months.values()];
 }
 
-const changeRate = (current, previous) => previous === 0 ? (current === 0 ? 0 : null) : Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10;
+const changeRate = (current, previous) => previous === 0 ? null : Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10;
 
 const attendanceMinutes = record => {
   const start = Date.parse(record.checked_in_at || ''); const end = Date.parse(record.checked_out_at || '');

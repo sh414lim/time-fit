@@ -207,6 +207,7 @@ test('연말 보고서는 월별 순익으로 묶고 직전 동기간 증감률�
   assert.deepEqual(previousFinanceRange('2026-01-01', '2026-12-31', 'annual'), { from: '2025-01-01', to: '2025-12-31' });
   assert.deepEqual(previousFinanceRange('2026-03-01', '2026-03-31', 'monthly'), { from: '2026-02-01', to: '2026-02-28' });
   assert.deepEqual(compareFinanceReports(current, previous).netSales, { current: 120, previous: 100, changeRate: 20 });
+  assert.equal(compareFinanceReports({ totals: { netSales: 0 } }, { totals: { netSales: 0 } }).netSales.changeRate, null);
   const grouped = groupFinanceSeries([
     { date: '2026-01-01', sales: 10, operatingExpenses: 2, laborCost: 3, operatingProfit: 5 },
     { date: '2026-01-02', sales: 20, operatingExpenses: 4, laborCost: 6, operatingProfit: 10 },

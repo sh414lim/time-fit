@@ -8,6 +8,16 @@ export function lastCompleteWeek(today = kstDate()) {
 }
 export const changePercent = (current, previous) => previous > 0 ? (current - previous) / previous * 100 : null;
 
+export function staffTodayStatus(attendance, schedules = [], staffId, today = kstDate(), now = new Date()) {
+  if (attendance?.checked_out_at) return '퇴근 완료';
+  if (attendance?.checked_in_at) return '근무 중';
+  const schedule = schedules.find(row => row.staff_id === staffId && row.work_date === today && row.approval_status === 'approved');
+  if (!schedule) return '일정 없음';
+  if (schedule.is_day_off) return '휴무';
+  if (!schedule.starts_at) return '일정 확인 필요';
+  return Date.parse(`${today}T${schedule.starts_at}+09:00`) > +now ? '예정' : '미출근';
+}
+
 export function validAttendanceCorrection({ date, checkedIn, checkedOut, reason, requireCheckout = false }, now = new Date()) {
   const start = Date.parse(`${checkedIn}+09:00`), end = checkedOut ? Date.parse(`${checkedOut}+09:00`) : null;
   return validDate(date) && checkedIn.slice(0, 10) === date && Number.isFinite(start) && start <= +now

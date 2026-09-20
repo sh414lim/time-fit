@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addDays, attendanceIssues, changePercent, kstDate, lastCompleteWeek, validDate, validAttendanceCorrection, weeklySales } from '../shared/operations.js';
+import { addDays, attendanceIssues, changePercent, kstDate, lastCompleteWeek, staffTodayStatus, validDate, validAttendanceCorrection, weeklySales } from '../shared/operations.js';
 import handler, { readAll } from '../server/api/operations-feedback.js';
 
 test('KST closed weeks cross month/year and never include the ongoing Sunday', () => {
@@ -14,6 +14,15 @@ test('KST closed weeks cross month/year and never include the ongoing Sunday', (
 const employee = (records, schedules) => ({ id: 'staff', name: '테스트', attendanceHistory: records, scheduleHistory: schedules });
 const shift = { work_date: '2026-09-16', starts_at: '22:00:00', ends_at: '06:00:00', approval_status: 'approved' };
 const record = { work_date: shift.work_date, checked_in_at: '2026-09-16T22:00:00+09:00' };
+test('오늘 직원 상태는 승인된 일정과 출퇴근 기록으로 판정한다', () => {
+  const date = '2026-09-16', now = new Date('2026-09-16T10:00:00+09:00');
+  assert.equal(staffTodayStatus(null, [], 'staff', date, now), '일정 없음');
+  assert.equal(staffTodayStatus(null, [{ ...shift, approval_status: 'rejected' }], 'staff', date, now), '일정 없음');
+  assert.equal(staffTodayStatus(null, [{ ...shift, staff_id: 'staff' }], 'staff', date, now), '예정');
+  assert.equal(staffTodayStatus(null, [{ ...shift, staff_id: 'staff', starts_at: '09:00:00' }], 'staff', date, now), '미출근');
+  assert.equal(staffTodayStatus({ checked_in_at: '2026-09-16T09:00:00+09:00' }, [], 'staff', date, now), '근무 중');
+  assert.equal(staffTodayStatus({ checked_out_at: '2026-09-16T18:00:00+09:00' }, [], 'staff', date, now), '퇴근 완료');
+});
 const options = { from: '2026-09-01', to: '2026-09-16', now: new Date('2026-09-17T02:00:00+09:00') };
 test('ongoing overnight shift is not a missing checkout or absence', () => {
   assert.equal(attendanceIssues([employee([record], [shift])], options).length, 0);

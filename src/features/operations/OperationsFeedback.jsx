@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { addDays, attendanceIssues, changePercent, kstDate, lastCompleteWeek, validAttendanceCorrection } from '../../../shared/operations.js';
 import { correctAttendance, loadOperations } from './operationsApi';
+import { readViewCache, writeViewCache } from '../../lib/viewCache';
 
 const number = value => Math.round(value).toLocaleString('ko-KR');
 const money = value => `${number(value)}원`;
@@ -11,22 +12,28 @@ function useNow() {
   useEffect(() => { const timer = setInterval(() => setNow(new Date()), 60000); return () => clearInterval(timer); }, []);
   return now;
 }
-function useOperations(organizationId, scope, filters, enabled = true, refreshToken = 0) {
-  const [state, setState] = useState({ data: null, loading: true, error: '' });
-  const [revision, setRevision] = useState(0);
+function useOperations(organizationId, scope, filters, enabled = true, refreshToken = 0, accountId) {
   const key = JSON.stringify(filters);
-  const identity = `${organizationId}:${scope}:${key}:${enabled}`;
+  const identity = `${accountId}:${organizationId}:${scope}:${key}:${enabled}`;
+  const cacheKey = enabled && accountId && organizationId ? `operations:${accountId}:${organizationId}:${scope}:${key}` : null;
+  const [state, setState] = useState(() => {
+    const data = readViewCache(cacheKey);
+    return { data, loading: enabled && !data, error: '', identity };
+  });
+  const [revision, setRevision] = useState(0);
   useEffect(() => {
     if (!enabled) { setState({ data: null, loading: false, error: '' }); return; }
+    const cached = readViewCache(cacheKey);
+    if (cached && !revision && !refreshToken) { setState({ data: cached, loading: false, error: '', identity }); return; }
     const controller = new AbortController();
     const timeout = setTimeout(() => { controller.abort(); setState(previous => ({ data: previous.identity === identity ? previous.data : null, loading: false, error: '조회 시간이 초과됐습니다. 다시 시도해 주세요.', identity })); }, 30000);
-    setState(previous => ({ data: previous.identity === identity ? previous.data : null, loading: true, error: '', identity }));
+    setState(previous => ({ data: previous.identity === identity ? previous.data : cached, loading: !(previous.identity === identity ? previous.data : cached), error: '', identity }));
     loadOperations(organizationId, scope, JSON.parse(key), controller.signal).then(data => {
       clearTimeout(timeout);
-      if (!controller.signal.aborted) setState({ data, loading: false, error: '', identity });
+      if (!controller.signal.aborted) { writeViewCache(cacheKey, data); setState({ data, loading: false, error: '', identity }); }
     }).catch(error => { clearTimeout(timeout); if (!controller.signal.aborted) setState(previous => ({ data: previous.identity === identity ? previous.data : null, loading: false, error: error.message, identity })); });
     return () => { clearTimeout(timeout); controller.abort(); };
-  }, [organizationId, scope, key, enabled, revision, refreshToken]);
+  }, [organizationId, scope, key, enabled, revision, refreshToken, cacheKey]);
   return { ...(state.identity === identity ? state : { data: null, loading: enabled, error: '' }), refresh: () => setRevision(value => value + 1) };
 }
 function LoadState({ resource, label }) {
@@ -36,11 +43,11 @@ function Task({ title, value, description, onClick }) {
   return <button className="ops-task" onClick={onClick}><span><b>{title}</b><small>{description}</small></span><strong>{value}</strong><span aria-hidden="true">›</span></button>;
 }
 
-export function OperationsHome({ employees, leaves, organizationId, isOwner, canAttendance, canLeave, onNavigate, dataError }) {
+export function OperationsHome({ employees, leaves, organizationId, accountId, isOwner, canAttendance, canLeave, onNavigate, dataError }) {
   const now = useNow(), today = kstDate(now), month = today.slice(0, 7);
   const from = `${month}-01`, to = addDays(today, -1);
   const issues = useMemo(() => attendanceIssues(employees, { from, to, now, leaves }), [employees, from, to, now, leaves]);
-  const finance = useOperations(organizationId, 'tasks', { month }, isOwner);
+  const finance = useOperations(organizationId, 'tasks', { month }, isOwner, 0, accountId);
   const count = type => issues.filter(issue => issue.types.includes(type)).length;
   const openIssues = type => onNavigate('attendance', { issueType: type, from, to });
   const pending = leaves.filter(row => row.status === '승인 대기');
@@ -55,16 +62,16 @@ export function OperationsHome({ employees, leaves, organizationId, isOwner, can
       {!hasTasks && !dataError && (canAttendance || canLeave || isOwner) && (!isOwner || (!finance.loading && !finance.error)) && <p className="ops-status">현재 확인할 항목이 없습니다.</p>}
       {!canAttendance && !canLeave && !isOwner && <p className="ops-status">조회 권한이 있는 메뉴에서 업무를 확인해 주세요.</p>}
     </section>
-    {isOwner && <WeeklyFeedback organizationId={organizationId} onNavigate={onNavigate}/>}
+    {isOwner && <WeeklyFeedback organizationId={organizationId} accountId={accountId} onNavigate={onNavigate}/>}
   </div>;
 }
 
-export function WeeklyFeedback({ organizationId, detailed = false, initialFrom, onNavigate, refreshToken }) {
+export function WeeklyFeedback({ organizationId, accountId, detailed = false, initialFrom, onNavigate, refreshToken }) {
   const today = kstDate(useNow()), latest = lastCompleteWeek(today);
   const [selectedFrom, setSelectedFrom] = useState(initialFrom || latest.from);
   const from = detailed ? selectedFrom : latest.from;
   const [tab, setTab] = useState('sales');
-  const resource = useOperations(organizationId, 'weekly', { from }, true, refreshToken);
+  const resource = useOperations(organizationId, 'weekly', { from }, true, refreshToken, accountId);
   const data = resource.data;
   const delta = (current, previous) => {
     if (!data.comparable) return '전주 비교 보류';
@@ -119,8 +126,8 @@ function AttendanceCorrection({ issue, organizationId, canCorrect, onClose, onSa
   return <div className="ops-correction"><button className="ops-back" disabled={busy} onClick={onClose}>← 확인 목록</button><h2>{issue.employee.name} · {issue.date}</h2><p>기존 출근 {time(issue.record?.checked_in_at)} / 퇴근 {time(issue.record?.checked_out_at)}</p>{issue.types.includes('schedule') && <p className="ops-warning">출퇴근 시각이 맞다면 스케줄 관리에서 해당 날짜의 근무를 확인하세요. 기록 정정만으로 일정 불일치가 해소되지는 않습니다.{canCorrect && onOpenSchedule && <button type="button" className="outline" disabled={busy} onClick={onOpenSchedule}>이 날짜 스케줄 확인</button>}</p>}{canCorrect ? <form onSubmit={save}><fieldset disabled={busy || confirm}><label>출근 시각 (한국 시간)<input type="datetime-local" step="1" required value={checkedIn} onChange={event => setCheckedIn(event.target.value)}/></label><label>퇴근 시각 (한국 시간)<input type="datetime-local" step="1" required={issue.types.includes('checkout')} value={checkedOut} onChange={event => setCheckedOut(event.target.value)}/></label><label>정정 사유<textarea required minLength={2} maxLength={500} value={reason} onChange={event => setReason(event.target.value)} placeholder="실제 근무 사실을 확인한 근거를 남겨 주세요."/></label></fieldset>{confirm && <p className="ops-warning">위 시각으로 실제 근태를 정정합니다. 기존 값과 정정 사유가 이력에 남으며, 급여 초안은 별도로 다시 검토해야 합니다.</p>}{error && <p role="alert" className="ops-error">{error}</p>}<div className="ops-controls">{confirm && <button type="button" className="outline" disabled={busy} onClick={() => setConfirm(false)}>다시 수정</button>}<button className="submit" disabled={busy}>{busy ? '저장 중…' : confirm ? '정정 내용 저장' : '정정 내용 확인'}</button></div></form> : <p className="ops-note">조회 권한으로 열었습니다. 정정은 최고관리자에게 요청해 주세요.</p>}</div>;
 }
 
-export function CardReviewList({ organizationId, month, onBack }) {
-  const resource = useOperations(organizationId, 'cards', { month });
+export function CardReviewList({ organizationId, accountId, month, onBack }) {
+  const resource = useOperations(organizationId, 'cards', { month }, true, 0, accountId);
   const [page, setPage] = useState(0), [expanded, setExpanded] = useState(null);
   const rows = resource.data?.cards || [];
   const currentPage = Math.min(page, Math.max(0, Math.ceil(rows.length / 10) - 1));
