@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addDays, attendanceIssues, changePercent, kstDate, lastCompleteWeek, staffTodayStatus, validDate, validAttendanceCorrection, weeklySales } from '../shared/operations.js';
+import { addDays, attendanceIssues, changePercent, kstDate, lastCompleteWeek, payrollAttendanceRange, staffTodayStatus, validDate, validAttendanceCorrection, weeklySales } from '../shared/operations.js';
 import handler, { readAll } from '../server/api/operations-feedback.js';
 
 test('KST closed weeks cross month/year and never include the ongoing Sunday', () => {
@@ -10,6 +10,16 @@ test('KST closed weeks cross month/year and never include the ongoing Sunday', (
   assert.equal(lastCompleteWeek('2026-01-01').from, '2025-12-22');
   assert.equal(validDate('2026-02-30'), false);
   assert.equal(changePercent(10, 0), null);
+});
+test('급여 확인 건수와 이동 목록은 동일한 월·어제까지의 기간을 사용한다', () => {
+  assert.deepEqual(payrollAttendanceRange('2026-09', '2026-09-20'), { from: '2026-09-01', to: '2026-09-19' });
+  assert.deepEqual(payrollAttendanceRange('2026-08', '2026-09-20'), { from: '2026-08-01', to: '2026-08-31' });
+  const range = payrollAttendanceRange('2026-09', '2026-09-20');
+  const staff = { id: 'staff', attendanceHistory: [], scheduleHistory: [] };
+  const options = { ...range, now: new Date('2026-09-20T10:00:00+09:00') };
+  assert.equal(attendanceIssues([staff], options).filter(issue => issue.types.includes('checkout')).length, 0);
+  staff.attendanceHistory.push({ work_date: '2026-09-18', checked_in_at: '2026-09-18T09:00:00+09:00' });
+  assert.equal(attendanceIssues([staff], options).filter(issue => issue.types.includes('checkout')).length, 1);
 });
 const employee = (records, schedules) => ({ id: 'staff', name: '테스트', attendanceHistory: records, scheduleHistory: schedules });
 const shift = { work_date: '2026-09-16', starts_at: '22:00:00', ends_at: '06:00:00', approval_status: 'approved' };
