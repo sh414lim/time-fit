@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { openPayrollPrintView } from './payrollPdf';
 import { scheduledPayroll } from './payrollComparison';
+import { roundPayableMinutes } from './payrollRounding';
 import { openAttendanceComparisonPrintView } from './attendanceComparisonPdf';
 import { buildAttendanceComparisonRows } from './attendanceComparison';
 import { payrollBreakMinutes } from './payrollBreakPolicy';
@@ -153,13 +154,6 @@ const attendanceMinutes = record => {
   if (!record?.checked_in_at || !record?.checked_out_at) return 0;
   return Math.max(0, (new Date(record.checked_out_at).getTime() - new Date(record.checked_in_at).getTime()) / 60000);
 };
-const roundedAttendanceMinutes = (record, policy = DEFAULT_LEAVE_POLICY) => {
-  const minutes = attendanceMinutes(record); const unit = Number(policy.attendance_rounding_minutes || 30);
-  if (!minutes || !unit) return minutes;
-  if (policy.attendance_rounding_mode === 'floor') return Math.floor(minutes / unit) * unit;
-  if (policy.attendance_rounding_mode === 'nearest') return Math.round(minutes / unit) * unit;
-  return Math.ceil(minutes / unit) * unit;
-};
 const clockMinutes = value => { const [hour, minute] = String(value || '0:0').split(':').map(Number); return hour * 60 + minute; };
 const attendanceMinuteOnWorkDate = (timestamp, workDate) => {
   if (!timestamp || !workDate) return 0;
@@ -181,7 +175,7 @@ const payableAttendanceMinutes = (record, schedules = [], policy = DEFAULT_LEAVE
   }
   const breakMinutes = schedule?.break_paid === true ? 0 : payrollBreakMinutes({ schedule, policy, grossMinutes });
   const netMinutes = Math.max(0, grossMinutes - breakMinutes);
-  const payableMinutes = policy.payroll_rounding_enabled === false ? netMinutes : roundedAttendanceMinutes({ checked_in_at: '2026-01-01T00:00:00Z', checked_out_at: new Date(Date.parse('2026-01-01T00:00:00Z') + netMinutes * 60000).toISOString() }, policy);
+  const payableMinutes = roundPayableMinutes(netMinutes, policy);
   return { grossMinutes, breakMinutes, payableMinutes, schedule };
 };
 const monthlyAttendance = employee => (employee.attendanceHistory || []).filter(record => String(record.work_date || '').startsWith(todayKey.slice(0, 7)));
@@ -824,7 +818,7 @@ function Payroll({ employees, leaveRequests = [], onSelect, canManage = false, i
   const liveTotal = rows.reduce((sum, row) => sum + row.basePay, 0);
   const draftUpdatedAt = workspace.draft?.updated_at ? new Date(workspace.draft.updated_at) : null;
   const draftUpdatedLabel = draftUpdatedAt && !Number.isNaN(draftUpdatedAt.getTime()) ? new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Seoul' }).format(draftUpdatedAt) : '';
-  const draftNeedsRefresh = Boolean(draftUpdatedAt && ((source?.attendance || []).some(record => record.work_date?.startsWith(month) && new Date(record.updated_at || record.checked_out_at || record.checked_in_at || 0).getTime() > draftUpdatedAt.getTime()) || (source?.schedules || []).some(schedule => schedule.work_date?.startsWith(month) && new Date(schedule.updated_at || 0).getTime() > draftUpdatedAt.getTime()) || (source?.settings?.temporary_fulltime_break_minutes != null && (source?.schedules || []).some(schedule => schedule.work_date?.startsWith(month) && String(schedule.shift_name || '').includes('풀타임')) && new Date(source.settings.updated_at || 0).getTime() > draftUpdatedAt.getTime()) || (workspace.contracts || []).some(contract => new Date(contract.created_at || 0).getTime() > draftUpdatedAt.getTime())));
+  const draftNeedsRefresh = Boolean(draftUpdatedAt && ((source?.attendance || []).some(record => record.work_date?.startsWith(month) && new Date(record.updated_at || record.checked_out_at || record.checked_in_at || 0).getTime() > draftUpdatedAt.getTime()) || (source?.schedules || []).some(schedule => schedule.work_date?.startsWith(month) && new Date(schedule.updated_at || 0).getTime() > draftUpdatedAt.getTime()) || new Date(source?.settings?.updated_at || 0).getTime() > draftUpdatedAt.getTime() || (workspace.contracts || []).some(contract => new Date(contract.created_at || 0).getTime() > draftUpdatedAt.getTime())));
   const payrollDetails = useMemo(() => rows.flatMap(row => (source?.attendance || []).filter(record => record.staff_id === row.staffId && String(record.work_date || '').startsWith(month) && record.checked_in_at && record.checked_out_at).map(record => {
     const calculation = payableAttendanceMinutes(record, source.schedules || [], source.settings || DEFAULT_LEAVE_POLICY);
     const schedule = calculation.schedule;

@@ -1,4 +1,5 @@
 import { payrollBreakMinutes } from './payrollBreakPolicy.js';
+import { roundPayableMinutes } from './payrollRounding.js';
 
 const minutesOf = value => {
   const [hour, minute] = String(value || '').split(':').map(Number);
@@ -16,14 +17,7 @@ export function scheduledPayroll({ staffId, month, schedules = [], policy = {}, 
     const grossMinutes = end - start;
     const breakMinutes = schedule.break_paid === true ? 0 : payrollBreakMinutes({ schedule, policy, grossMinutes });
     const netMinutes = Math.max(0, grossMinutes - breakMinutes);
-    if (policy.payroll_rounding_enabled === false) return sum + netMinutes;
-    const unit = Number(policy.attendance_rounding_minutes || 30);
-    if (!unit) return sum + netMinutes;
-    const mode = policy.attendance_rounding_mode;
-    const rounded = mode === 'floor' ? Math.floor(netMinutes / unit) * unit
-      : mode === 'nearest' ? Math.round(netMinutes / unit) * unit
-        : Math.ceil(netMinutes / unit) * unit;
-    return sum + rounded;
+    return sum + roundPayableMinutes(netMinutes, policy);
   }, 0);
   const amount = payType === 'monthly' ? Number(rate) || 0
     : payType === 'annual' ? (Number(rate) || 0) / 12
