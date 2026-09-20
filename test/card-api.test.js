@@ -259,6 +259,14 @@ test('결산 CSV에는 증빙·카드 상태와 확정 감사정보가 포함된
   assert.equal(rows[6][5], 1);
 });
 
+test('급여 초안이 없으면 결산 내보내기에 잠정 순익을 명시한다', () => {
+  const rows = financeReportCsvRows({ periodType: 'monthly', report: {
+    from: '2026-09-01', to: '2026-09-30', totals: { netSales: 10, operatingExpenses: 2, laborCost: 0, operatingProfit: 8 }, series: [],
+    completeness: { payrollComplete: false }, audit: {},
+  } });
+  assert.ok(rows.some(row => row[0] === '순익 판정' && row[1].includes('잠정')));
+});
+
 test('지출 원장 합계에서 제외 건을 빼고 미증빙 건을 집계한다', () => {
   const summary = summarizeExpenses([
     { total_amount: 100000, status: 'confirmed', sources: [{ source_type: 'receipt' }] },

@@ -1,5 +1,10 @@
 export const kstDate = (value = new Date()) => new Date(new Date(value).getTime() + 9 * 3600000).toISOString().slice(0, 10);
 export const addDays = (date, days) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
+export function payrollAttendanceRange(month, today = kstDate()) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  const monthEnd = new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
+  return { from: `${month}-01`, to: month === today.slice(0, 7) ? addDays(today, -1) : monthEnd };
+}
 export const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && addDays(value, 0) === value;
 export function lastCompleteWeek(today = kstDate()) {
   const day = new Date(`${today}T00:00:00Z`).getUTCDay();

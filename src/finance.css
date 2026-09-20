@@ -105,6 +105,9 @@
 .manager .content .pay-cards .card:first-child::before { background: var(--finance-blue); }
 .manager .content .pay-cards strong { margin-top: 3px; font-size: 28px; letter-spacing: -1.5px; }
 .manager .content .pay-cards span { margin-top: 11px; line-height: 1.45; }
+.payroll-issue-link { margin-top: 12px; width: fit-content; }
+.payroll-contract-warning { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0 18px; padding: 14px 16px; border: 1px solid #f2d58a; border-radius: 12px; background: #fffaf0; color: #755000; font-size: 12px; }
+@media(max-width:650px){.payroll-contract-warning{align-items:stretch;flex-direction:column}.payroll-contract-warning button{width:100%}}
 
 .manager .content .salary-row {
   min-height: 72px;
@@ -270,6 +273,14 @@
 .finance-profit-cards small { color: #8b95a1; font-size: 10px; font-weight: 700; }
 .finance-profit-cards .positive { border-color: #bcebdc; background: #f0fbf7; color: #00875f; }
 .finance-profit-cards .negative { border-color: #ffd3d7; background: #fff5f5; color: #d92d3a; }
+.finance-profit-cards .provisional { border-color: #f1d79c; background: #fffaf0; color: #8a5a00; }
+.finance-provisional-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 16px 0; padding: 16px; border: 1px solid #e8c978; border-radius: 12px; background: #fff8e7; color: #684700; }
+.finance-provisional-banner div { display: grid; gap: 5px; min-width: 0; }
+.finance-provisional-banner b { font-size: 14px; }
+.finance-provisional-banner span { font-size: 12px; line-height: 1.5; }
+.finance-provisional-banner button { flex: none; min-height: 40px; }
+.finance-chart-pending { margin-top: 18px; padding: 30px 18px; border: 1px dashed #e8c978; border-radius: 12px; color: #8a5a00; background: #fffcf5; text-align: center; font-size: 13px; }
+@media(max-width:650px){.finance-provisional-banner{align-items:stretch;flex-direction:column}.finance-provisional-banner button{width:100%}}
 .finance-completeness { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 12px 14px; border-radius: 11px; background: #fff8eb; color: #8a5a00; }
 .finance-completeness b { font-size: 12px; }
 .finance-completeness span { font-size: 11px; }

@@ -15,6 +15,7 @@ import '../src/attendance-management.css';
 import '../src/monthly-schedule-editor.css';
 import '../src/features/operations/operations.css';
 import '../src/manager-sidebar.css';
+import '../src/expense-workspace.css';
 
 export default function TimeFitApp({ Component, pageProps }) {
   return <Component {...pageProps} />;
