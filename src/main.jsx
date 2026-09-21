@@ -7,11 +7,13 @@ import { openAttendanceComparisonPrintView } from './attendanceComparisonPdf';
 import { buildAttendanceComparisonRows } from './attendanceComparison';
 import { payrollBreakMinutes, usesFixedButterVillaBreak } from './payrollBreakPolicy';
 import { openSchedulePrintView } from './schedulePdf';
-import { OperationsHome, AttendanceIssueList, CardReviewList } from './features/operations/OperationsFeedback';
+import { OperationsHome, WeeklyFeedback, AttendanceIssueList, CardReviewList } from './features/operations/OperationsFeedback';
 import { attendanceIssues, payrollAttendanceRange, staffTodayStatus } from '../shared/operations.js';
 import { invalidateViewCache, readViewCache, writeViewCache } from './lib/viewCache';
 import CardConnectionWizard from './features/finance/CardConnectionWizard';
 import ExpenseReviewQueue from './features/finance/ExpenseReviewQueue';
+import FinanceReportDashboard from './features/finance/FinanceReportDashboard';
+import ExpenseExceptionInbox from './features/finance/ExpenseExceptionInbox';
 import EmployeeReceiptSubmission from './features/finance/EmployeeReceiptSubmission';
 import ExpenseReminderSettings from './features/finance/ExpenseReminderSettings';
 import ExpenseLedger from './features/finance/ExpenseLedger';
@@ -830,49 +832,49 @@ function Payroll({ employees, leaveRequests = [], onSelect, canManage = false, i
   return <><div className="page-title"><div><p>계약 이력과 실제 근태 기준</p><h1>급여 관리</h1><span>급여 초안은 검토용이며 세금·공제 확정 전 금액입니다.</span></div></div><section className="card full-card"><div className="card-title"><div><h2>급여 초안 생성</h2><p>선택 월의 실제 퇴근 완료 기록과 적용 중인 계약 단가를 스냅샷으로 저장합니다.</p></div>{onOpenAttendance && <button className="outline" onClick={() => onOpenAttendance(month)}>이 달 근태 확인</button>}</div><div className="settings-input-grid"><label>정산 월<input type="month" value={month} onChange={event => setMonth(event.target.value)}/></label><div><b>현재 상태</b><p className="settings-help">{workspace.draft ? `초안 저장됨${draftUpdatedLabel ? ` · ${draftUpdatedLabel} 기준` : ''}` : '저장된 초안 없음'}</p></div></div>{workspace.draft && <div className={`payroll-snapshot-notice ${draftNeedsRefresh ? 'stale' : ''}`}><b>{draftNeedsRefresh ? '새 근태·스케줄·계약 반영이 필요해요' : '저장된 초안을 표시하고 있어요'}</b><span>{draftNeedsRefresh ? `현재 계산 예상액은 ${formatMoney(liveTotal)}입니다. 초안을 다시 저장하면 최신 근태·스케줄 휴게시간·계약 단가가 반영됩니다.` : '저장 이후의 근태·계약 변경은 초안을 다시 저장해야 반영됩니다.'}</span></div>}<div className="form-actions">{canManage && <button className="submit" disabled={busy || loading || !rows.length} onClick={saveDraft}>{busy ? '저장 중…' : workspace.draft ? '이 달 급여 초안 다시 저장' : '이 달 급여 초안 저장'}</button>}<button className="outline" disabled={loading || !rows.length} onClick={() => printPayroll(null)}>전체 급여 PDF</button><button className="outline" disabled={!rows.length} onClick={downloadCsv}>CSV 다운로드</button></div></section>{canManage && <section className="card full-card"><div className="card-title"><div><h2>급여 계약 이력 추가</h2><p>직접 등록한 직원은 최초 계약이 자동 생성됩니다. 단가 변경일은 이력으로 추가해 주세요.</p></div></div><form className="settings-form payroll-contract-form" onSubmit={saveContract}><div className="settings-input-grid"><label>직원<select name="staffId" required defaultValue=""><option value="" disabled>직원을 선택해 주세요</option>{source?.staff.map(staff => <option value={staff.id} key={staff.id}>{staff.account?.display_name || staff.display_name || '직원'}</option>)}</select></label><label>적용 시작일<input name="effectiveFrom" type="date" defaultValue={`${month}-01`} required/></label><label>급여 형태<select name="payType" defaultValue="hourly"><option value="hourly">시급제</option><option value="daily">일급제</option><option value="monthly">월급제</option><option value="annual">연봉제</option></select></label><label>단가<input name="rate" type="number" min="1" placeholder="원 단위" required/></label></div><label>변경 사유 (선택)<input name="memo" placeholder="예: 9월 계약 갱신"/></label><button className="outline" disabled={busy || loading}>{busy ? '저장 중…' : '계약 이력 저장'}</button></form></section>}<section className="pay-cards"><div className="card"><p>{workspace.draft ? '저장된 초안 인건비' : '예상 총 인건비'}</p><strong>{formatMoney(total)}</strong><span>{workspace.draft ? '저장된 세전 스냅샷' : '세전 예상액'}</span></div><div className="card"><p>급여 산정 대상</p><strong>{rows.length}<small>명</small></strong><span>실제 근태와 계약 기준</span></div><div className="card"><p>퇴근 기록 누락</p><strong>{missingCheckoutIssues.length}<small>건</small></strong><span>{missingCheckoutIssues.length ? '이 달의 실제 근태 확인 목록 기준' : '확인할 퇴근 누락 기록이 없어요.'}</span>{onOpenAttendance && missingCheckoutIssues.length > 0 && <button className="outline payroll-issue-link" onClick={() => onOpenAttendance(month)}>기록 확인하기</button>}</div></section>{missingContracts.length > 0 && <div className="payroll-contract-warning" role="status"><span>계약 이력 미등록 {missingContracts.length}명 · {missingContracts.map(row => { const employee = employees.find(item => item.id === row.staffId); return `${row.name}${employee?.team ? ` (${employee.team})` : ''}`; }).join(', ')}</span>{canManage ? <button className="outline" onClick={() => document.querySelector('.payroll-contract-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>계약 등록으로 이동</button> : <span>최고관리자에게 계약 등록을 요청해 주세요.</span>}</div>}<section className="card full-card"><div className="card-title"><div><h2>직원별 급여 초안</h2><p>시급은 운영 설정의 반올림 단위가 적용된 실제 퇴근 완료 시간을 사용합니다.</p></div></div>{loading ? <LoadingBar label="급여 계약과 근태를 불러오는 중…"/> : rows.length ? rows.map(row => <div className="salary-row clickable-row" key={row.staffId} onClick={() => { const employee = employees.find(item => item.id === row.staffId); if (employee) onSelect(employee); }}><span className="grow"><b>{row.name}</b><small>{row.payType === 'monthly' ? '월급제' : row.payType === 'annual' ? `연봉제 · 월 환산 ${formatMoney(row.rate / 12)}` : row.payType === 'daily' ? `일급제 · 완료 ${row.completedDays}일` : `시급제 · 실근무 ${formatHours(row.workedMinutes)}`} · 적용 단가 {formatMoney(row.rate)}</small></span><span>휴가 {row.leaveDays}일</span><span className="payroll-row-amount"><strong>{formatMoney(row.estimatedTotal)}</strong>{draftNeedsRefresh && row.savedEstimatedTotal !== null && Math.round(row.savedEstimatedTotal) !== Math.round(row.basePay) && <small>현재 계산 {formatMoney(row.basePay)}</small>}</span><Chip type={row.hasContract ? 'green' : 'orange'}>{row.hasContract ? '계약 적용' : '계약 확인 필요'}</Chip><button type="button" className="outline payroll-pdf-button" onClick={event => { event.stopPropagation(); printPayroll(row.staffId); }}>개별 PDF</button></div>) : <div className="empty-schedule"><b>급여 산정 대상 직원이 없어요.</b><span>직원을 등록하고 계약 단가를 입력해 주세요.</span></div>}</section>{message && <NoticeModal message={message} tone={/못|확인/.test(message) ? 'error' : 'success'} onClose={() => setMessage('')}/>}</>;
 }
 
-function SalesAnalytics({ organizationId }) {
-  const cached = getCachedOrganizationSalesDashboard(organizationId);
-  const [data, setData] = useState(cached?.data || null);
-  const [loading, setLoading] = useState(!cached);
+function SalesAnalytics({ organizationId, accountId, initialFrom }) {
+  const [revision, setRevision] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const refresh = async (force = false) => {
-    if (!organizationId) return;
-    setLoading(!data); setError('');
-    try { setData(await loadOrganizationSalesDashboard(organizationId, {}, { force })); }
-    catch (nextError) { setError(nextError.message || '매출 데이터를 불러오지 못했습니다.'); }
-    finally { setLoading(false); }
-  };
-  useEffect(() => { refresh(); }, [organizationId]);
+  const [message, setMessage] = useState('');
   const sync = async () => {
-    setBusy(true); setError('');
-    try { await syncOrganizationSales(organizationId); await refresh(true); }
-    catch (nextError) { setError(nextError.message || '매출 동기화를 완료하지 못했습니다.'); }
+    setBusy(true); setMessage('');
+    try { await syncOrganizationSales(organizationId); setRevision(value => value + 1); setMessage('수집을 요청했습니다. 수집 시각과 기간별 내역을 확인해 주세요.'); }
+    catch (error) { setMessage(error.message || '매출 수집을 요청하지 못했습니다.'); }
     finally { setBusy(false); }
   };
-  const summary = data?.summary || {};
-  const connection = data?.connection;
-  return <>
-    <div className="page-title"><div><p>사업장별 Toss Place 연동 데이터</p><h1>매출 분석</h1><span>연결된 매장의 주문·완료 매출·취소 현황을 확인하세요.</span></div><div className="sales-page-actions"><button className="outline" disabled={busy || loading} onClick={sync}>{busy ? '동기화 중…' : '지금 동기화'}</button><button className="outline" disabled={busy || loading} onClick={() => refresh(true)}>새로고침</button></div></div>
-    {error && <p className="settings-help" role="alert">{error}</p>}
-    {loading && !data ? <LoadingBar label="매출 데이터를 불러오는 중…"/> : !connection ? <section className="card full-card empty-schedule"><b>Toss Place 연결이 필요해요.</b><span>운영 설정에서 연결 정보를 확인해 주세요.</span></section> : <>
-      <section className="pay-cards"><div className="card"><p>완료 매출</p><strong>{formatMoney(Number(summary.completed_amount) || 0)}</strong><span>{connection.display_name} · 최근 동기화 {connection.last_synced_at ? new Date(connection.last_synced_at).toLocaleString('ko-KR') : '초기 동기화 준비 중'}</span></div><div className="card"><p>전체 주문</p><strong>{Number(summary.order_count) || 0}<small>건</small></strong><span>완료 {Number(summary.completed_order_count) || 0}건</span></div><div className="card"><p>취소 주문</p><strong>{Number(summary.cancelled_count) || 0}<small>건</small></strong><span>{connection.connection_status === 'connected' ? '연결 정상' : '연결 확인 필요'}</span></div></section>
-      <section className="card full-card"><div className="card-title"><div><h2>최근 주문</h2><p>{data?.syncState?.last_sync_error || connection.last_error || '이 사업장에 연결된 Toss Place 주문만 표시합니다.'}</p></div><Chip type={connection.sync_enabled ? 'green' : 'orange'}>{connection.sync_enabled ? '자동 동기화 사용' : '동기화 중지'}</Chip></div>{data?.recentOrders?.length ? data.recentOrders.map(order => <div className="salary-row" key={order.order_id}><span className="grow"><b>{order.order_id}</b><small>{order.ordered_at ? new Date(order.ordered_at).toLocaleString('ko-KR') : '-'}</small></span><span>{order.source || '-'}</span><strong>{formatMoney(Number(order.total_amount) || 0)}</strong><Chip type={String(order.state || '').toLowerCase().includes('cancel') ? 'orange' : 'green'}>{order.state || '완료'}</Chip></div>) : <div className="empty-schedule"><b>동기화된 주문이 없어요.</b><span>연결 정보를 저장한 후 동기화를 실행해 주세요.</span></div>}</section>
-    </>}
-  </>;
+  return <><div className="page-title"><div><p>저장된 주문 기준</p><h1>매출 분석</h1><span>마감된 주를 같은 요일로 비교합니다.</span></div><button className="outline" disabled={busy} onClick={sync}>{busy ? '수집 요청 중…' : '매출 수집 요청'}</button></div>{message && <p className="ops-warning" role="status">{message}</p>}<WeeklyFeedback refreshToken={revision} organizationId={organizationId} accountId={accountId} detailed initialFrom={initialFrom}/></>;
 }
 
+const EXPENSE_SECTIONS = [
+  ['overview', '현황'], ['ledger', '지출 원장'], ['evidence', '증빙 검토'], ['cards', '법인카드'], ['settlement', '결산·문서'],
+];
+
 function ExpenseWorkspace({ organizationId, accountId, employees, navigationContext, onNavigate }) {
-  return <>
-    <div className="page-title"><div><p>지출 원천과 정산 자료 통합 관리</p><h1>지출 · 증빙</h1><span>법인카드 승인내역과 세무 증빙을 한 곳에서 관리하세요.</span></div></div>
-    {navigationContext?.cardReview && <CardReviewList accountId={accountId} organizationId={organizationId} month={navigationContext.month} onBack={() => onNavigate('dashboard')} onOpenReviewQueue={() => document.querySelector('.expense-review-queue')?.scrollIntoView({ behavior: 'smooth' })}/>}
-    <ExpenseLedger organizationId={organizationId}/>
-    <ManualExpenseForm organizationId={organizationId} employees={employees}/>
-    <ExpenseReviewQueue organizationId={organizationId}/>
-    <ExpenseReminderSettings organizationId={organizationId}/>
-    <CorporateCards organizationId={organizationId} employees={employees}/>
-    <FinanceDocuments organizationId={organizationId}/>
-  </>;
+  const initialSection = navigationContext?.cardReview ? 'cards' : 'overview';
+  const [section, setSection] = useState(initialSection);
+  const [visited, setVisited] = useState(() => new Set([initialSection]));
+  const selectSection = next => { setSection(next); setVisited(current => new Set([...current, next])); };
+  useEffect(() => { if (navigationContext?.cardReview) selectSection('cards'); }, [navigationContext?.cardReview, navigationContext?.month]);
+  const fromException = item => {
+    const next = item.target === 'receipts' ? 'evidence' : item.target === 'closeouts' ? 'overview' : 'cards';
+    selectSection(next);
+    requestAnimationFrame(() => document.querySelector(item.target === 'closeouts' ? '.finance-report-dashboard' : next === 'evidence' ? '.expense-review-queue' : '.corporate-card-workspace')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  };
+  return <div className="expense-workspace">
+    <div className="page-title expense-workspace-title"><div><p>확인할 일부터 결산까지</p><h1>지출 · 증빙</h1><span>업무별 탭에서 지출 원천과 증빙을 확인하세요.</span></div></div>
+    <div className="expense-workspace-tabs" role="tablist" aria-label="지출·증빙 업무">
+      {EXPENSE_SECTIONS.map(([id, label], index) => <button type="button" role="tab" key={id} id={`expense-tab-${id}`} aria-selected={section === id} aria-controls={`expense-panel-${id}`} tabIndex={section === id ? 0 : -1} onClick={() => selectSection(id)} onKeyDown={event => { if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return; event.preventDefault(); const offset = event.key === 'ArrowRight' ? 1 : -1; const next = EXPENSE_SECTIONS[(index + offset + EXPENSE_SECTIONS.length) % EXPENSE_SECTIONS.length][0]; selectSection(next); document.getElementById(`expense-tab-${next}`)?.focus(); }}>{label}</button>)}
+    </div>
+    {EXPENSE_SECTIONS.map(([id]) => <div key={id} id={`expense-panel-${id}`} role="tabpanel" aria-labelledby={`expense-tab-${id}`} hidden={section !== id}>
+      {visited.has(id) && <>
+      {id === 'overview' && <><ExpenseExceptionInbox organizationId={organizationId} onNavigate={fromException}/><FinanceReportDashboard organizationId={organizationId} onOpenPayroll={() => onNavigate('payroll')}/></>}
+      {id === 'ledger' && <><ExpenseLedger organizationId={organizationId}/><ManualExpenseForm organizationId={organizationId} employees={employees}/></>}
+      {id === 'evidence' && <><ExpenseReviewQueue organizationId={organizationId}/><ExpenseReminderSettings organizationId={organizationId}/></>}
+      {id === 'cards' && <>{navigationContext?.cardReview && <CardReviewList accountId={accountId} organizationId={organizationId} month={navigationContext.month} onBack={() => onNavigate('dashboard')} onOpenReviewQueue={() => selectSection('evidence')}/>}<CorporateCards organizationId={organizationId} employees={employees}/></>}
+      {id === 'settlement' && <FinanceDocuments organizationId={organizationId}/>}
+      </>}
+    </div>)}
+  </div>;
 }
 
 function CorporateCards({ organizationId, employees = [] }) {
