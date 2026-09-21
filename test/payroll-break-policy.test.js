@@ -11,6 +11,12 @@ test('temporary Butter Villa policy deducts 120 minutes for full-time even when 
   assert.equal(payrollBreakMinutes({ schedule: fullTime, policy, grossMinutes: 90 }), 90);
 });
 
+test('temporary Butter Villa policy also deducts 120 minutes for regular shifts', () => {
+  const policy = { temporary_fulltime_break_minutes: 120, payroll_deduct_break_enabled: false };
+  assert.equal(payrollBreakMinutes({ schedule: { shift_name: '일반 근무', break_minutes: 30, is_day_off: false }, policy, grossMinutes: 600 }), 120);
+  assert.equal(payrollBreakMinutes({ schedule: { shift_name: '일반근무', break_minutes: 0, is_day_off: false }, policy, grossMinutes: 480 }), 120);
+});
+
 test('other shifts and organizations retain existing deduction settings', () => {
   const policy = { temporary_fulltime_break_minutes: 120, payroll_deduct_break_enabled: false };
   assert.equal(payrollBreakMinutes({ schedule: { shift_name: '오전 근무', break_minutes: 30 }, policy, grossMinutes: 300 }), 0);
