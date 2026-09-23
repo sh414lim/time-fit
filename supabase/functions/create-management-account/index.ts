@@ -1,4 +1,4 @@
-import { createClient } from 'npm:@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2.49.4'
 
 const headers = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Content-Type': 'application/json' }
 const loginEmail = (loginId: string) => `${loginId.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '')}@accounts.timefit.local`
