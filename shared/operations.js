@@ -11,6 +11,11 @@ export function lastCompleteWeek(today = kstDate()) {
   const from = addDays(today, -((day + 6) % 7) - 7);
   return { from, to: addDays(from, 6), previousFrom: addDays(from, -7), previousTo: addDays(from, -1) };
 }
+export function recentCompletedWeek(today = kstDate()) {
+  const to = addDays(today, -1);
+  const from = addDays(to, -6);
+  return { from, to, previousFrom: addDays(from, -7), previousTo: addDays(from, -1) };
+}
 export const changePercent = (current, previous) => previous > 0 ? (current - previous) / previous * 100 : null;
 
 export function staffTodayStatus(attendance, schedules = [], staffId, today = kstDate(), now = new Date()) {

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { addDays, attendanceIssues, kstDate, lastCompleteWeek, validAttendanceCorrection } from '../../../shared/operations.js';
+import { addDays, attendanceIssues, kstDate, recentCompletedWeek, validAttendanceCorrection } from '../../../shared/operations.js';
 import { correctAttendance, loadOperations } from './operationsApi';
 import { readViewCache, writeViewCache } from '../../lib/viewCache';
 import SalesAnalysisReport from './SalesAnalysisReport';
@@ -68,7 +68,7 @@ export function OperationsHome({ employees, leaves, organizationId, accountId, i
 }
 
 export function WeeklyFeedback({ organizationId, accountId, detailed = false, initialFrom, onNavigate, refreshToken, onSync, syncing = false, syncMessage = '' }) {
-  const today = kstDate(useNow()), latest = lastCompleteWeek(today);
+  const today = kstDate(useNow()), latest = recentCompletedWeek(today);
   const [selectedFrom, setSelectedFrom] = useState(initialFrom || latest.from);
   const from = detailed ? selectedFrom : latest.from;
   const resource = useOperations(organizationId, 'weekly', { from }, true, refreshToken, accountId);
@@ -76,10 +76,10 @@ export function WeeklyFeedback({ organizationId, accountId, detailed = false, in
   const statusLabel = !data ? '확인 중' : data.status?.state === 'finalized' ? '마감 완료' : data.status?.state === 'revised' ? '재집계됨' : data.syncError ? '수집 오류' : '수집 확인 필요';
   return <section className={`card ops-card ops-weekly ${detailed ? 'sales-report' : 'sales-home-summary'}`}>
     <div className="ops-heading sales-analysis-heading">
-      <div><p className="ops-eyebrow">{detailed ? 'POS 완료 주문 · 전주 동일 요일 비교' : '지난 마감 주 요약'}</p><h2>{detailed ? '주간 매출 성과' : '매출 흐름'}</h2><p>{from} ~ {addDays(from, 6)} <span>비교 {addDays(from, -7)} ~ {addDays(from, -1)}</span></p></div>
+      <div><p className="ops-eyebrow">{detailed ? 'POS 완료 주문 · 직전 7일 동일 요일 비교' : '어제까지 최근 7일'}</p><h2>{detailed ? '7일 매출 성과' : '매출 흐름'}</h2><p>{from} ~ {addDays(from, 6)} <span>비교 {addDays(from, -7)} ~ {addDays(from, -1)}</span></p></div>
       <span className={`sales-status ${data?.status?.state || 'loading'}`}>{statusLabel}</span>
     </div>
-    {detailed && <div className="sales-period-toolbar"><div><button className="outline" onClick={() => setSelectedFrom(addDays(from, -7))}>← 이전 주</button><button className="outline" disabled={from >= latest.from} onClick={() => setSelectedFrom(addDays(from, 7))}>다음 주 →</button><button className="outline" disabled={from === latest.from} onClick={() => setSelectedFrom(latest.from)}>최근 마감 주</button></div><div>{onSync && <button className="submit" disabled={syncing || resource.loading} onClick={() => onSync({ from: addDays(from, -7), to: addDays(from, 6) })}>{syncing ? '매출 동기화 중…' : '최신 매출 동기화'}</button>}<button className="outline" disabled={resource.loading || syncing} onClick={resource.refresh}>다시 조회</button></div></div>}
+    {detailed && <div className="sales-period-toolbar"><div><button className="outline" onClick={() => setSelectedFrom(addDays(from, -7))}>← 이전 7일</button><button className="outline" disabled={from >= latest.from} onClick={() => setSelectedFrom(addDays(from, 7))}>다음 7일 →</button><button className="outline" disabled={from === latest.from} onClick={() => setSelectedFrom(latest.from)}>최근 7일</button></div><div>{onSync && <button className="submit" disabled={syncing || resource.loading} onClick={() => onSync({ from: addDays(from, -7), to: addDays(from, 6) })}>{syncing ? '매출 동기화 중…' : '최신 매출 동기화'}</button>}<button className="outline" disabled={resource.loading || syncing} onClick={resource.refresh}>다시 조회</button></div></div>}
     {syncMessage && <p className="ops-warning" role="status">{syncMessage}</p>}
     <LoadState resource={resource} label="주간 매출"/>
     {data && (!data.connected ? <p className="ops-status">연결된 매출 데이터가 없습니다. 운영 설정에서 POS 연결을 확인해 주세요.</p> : <SalesAnalysisReport data={data} detailed={detailed} statusLabel={statusLabel} time={time} onOpenDetail={() => onNavigate('sales', { from })}/>)}

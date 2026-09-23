@@ -1,5 +1,5 @@
 import { authorizeFinance, financeRest, financeServerConfigured } from './_finance-server.js';
-import { addDays, kstDate, lastCompleteWeek, validDate, weeklySales } from '../../shared/operations.js';
+import { addDays, kstDate, recentCompletedWeek, validDate, weeklySales } from '../../shared/operations.js';
 
 // Never silently truncate a busy store at PostgREST's row limit.
 export async function readAll(path, read = financeRest) {
@@ -39,8 +39,8 @@ export default async function handler(req, res) {
     const today = kstDate();
     const org = `organization_id=eq.${encodeURIComponent(organizationId)}`;
     if (scope === 'weekly') {
-      if (from !== undefined && (!validDate(from) || new Date(`${from}T00:00:00Z`).getUTCDay() !== 1 || addDays(from, 6) >= today)) return res.status(400).json({ ok: false, error: '마감된 주의 월요일을 선택해 주세요.' });
-      const range = from ? { from, to: addDays(from, 6), previousFrom: addDays(from, -7), previousTo: addDays(from, -1) } : lastCompleteWeek(today);
+      if (from !== undefined && (!validDate(from) || addDays(from, 6) >= today)) return res.status(400).json({ ok: false, error: '어제까지 완료된 7일 기간을 선택해 주세요.' });
+      const range = from ? { from, to: addDays(from, 6), previousFrom: addDays(from, -7), previousTo: addDays(from, -1) } : recentCompletedWeek(today);
       return res.status(200).json({ ok: true, data: await loadWeeklyFeedback(organizationId, range) });
     }
     const month = req.query.month || today.slice(0, 7);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addDays, attendanceIssues, changePercent, kstDate, lastCompleteWeek, payrollAttendanceRange, staffTodayStatus, validDate, validAttendanceCorrection, weeklySales } from '../shared/operations.js';
+import { addDays, attendanceIssues, changePercent, kstDate, lastCompleteWeek, payrollAttendanceRange, recentCompletedWeek, staffTodayStatus, validDate, validAttendanceCorrection, weeklySales } from '../shared/operations.js';
 import handler, { readAll } from '../server/api/operations-feedback.js';
 
 test('KST closed weeks cross month/year and never include the ongoing Sunday', () => {
@@ -10,6 +10,11 @@ test('KST closed weeks cross month/year and never include the ongoing Sunday', (
   assert.equal(lastCompleteWeek('2026-01-01').from, '2025-12-22');
   assert.equal(validDate('2026-02-30'), false);
   assert.equal(changePercent(10, 0), null);
+});
+
+test('recent sales week ends yesterday and compares the preceding seven days', () => {
+  assert.deepEqual(recentCompletedWeek('2026-09-23'), { from: '2026-09-16', to: '2026-09-22', previousFrom: '2026-09-09', previousTo: '2026-09-15' });
+  assert.deepEqual(recentCompletedWeek('2026-01-01'), { from: '2025-12-25', to: '2025-12-31', previousFrom: '2025-12-18', previousTo: '2025-12-24' });
 });
 test('급여 확인 건수와 이동 목록은 동일한 월·어제까지의 기간을 사용한다', () => {
   assert.deepEqual(payrollAttendanceRange('2026-09', '2026-09-20'), { from: '2026-09-01', to: '2026-09-19' });
@@ -49,7 +54,7 @@ test('rejected schedules, approved full leave, current dates, overlapping issues
   assert.deepEqual(rows[0].types, ['checkout', 'schedule']);
 });
 function salesFixture() {
-  const range = lastCompleteWeek('2026-09-17');
+  const range = recentCompletedWeek('2026-09-17');
   const orders = Array.from({ length: 14 }, (_, i) => ({ order_id: `order-${i}`, ordered_at: `${addDays(range.previousFrom, i)}T12:00:00+09:00`, state: 'COMPLETED', total_amount: i < 7 ? 100 : 200, raw_order: { lineItems: [{ item: { title: '메뉴', code: 'menu-1', category: { title: '식사' } }, itemPrice: { priceValue: 100 }, quantity: i < 7 ? 1 : 2 }, { item: { title: '무료 옵션' }, itemPrice: { priceValue: 0 }, quantity: 1 }] } }));
   const daily = orders.map(order => ({ sales_date: kstDate(order.ordered_at), order_count: 1 }));
   const syncRuns = [{ status: 'succeeded', page_complete: true, window_from: `${range.previousFrom}T00:00:00+09:00`, window_to: `${range.to}T23:59:59.999+09:00` }];
@@ -143,14 +148,14 @@ test('corrections preserve seconds and reject future, reversed, missing checkout
   for (const patch of [{ checkedOut: '' }, { checkedOut: '2026-09-15T08:00' }, { checkedOut: '2026-09-18T19:00' }, { checkedIn: '2026-09-16T09:00' }, { reason: ' ' }]) assert.equal(validAttendanceCorrection({ ...input, ...patch }, now), false);
 });
 
-test('weekly API rejects open weeks and non-Monday ranges before reading sales', async t => {
+test('weekly API accepts any completed seven-day range and rejects ranges including today', async t => {
   process.env.SUPABASE_URL = 'https://test'; process.env.SUPABASE_SERVICE_ROLE_KEY = 'test';
   const seen = [];
   t.mock.method(globalThis, 'fetch', async url => {
     seen.push(url);
     return new Response(JSON.stringify(url.includes('/auth/') ? { id: 'owner' } : [{ id: org, owner_id: 'owner' }]));
   });
-  for (const from of ['2026-02-30', '2026-09-08', addDays(lastCompleteWeek().from, 7)]) {
+  for (const from of ['2026-02-30', addDays(recentCompletedWeek().from, 1)]) {
     const res = response();
     await handler({ method: 'GET', headers: { authorization: 'Bearer test' }, query: { organizationId: org, from } }, res);
     assert.equal(res.statusCode, 400);
@@ -180,8 +185,8 @@ test('weekly API scopes every order and cache read by both organization and conn
     assert.match(url, new RegExp(`organization_id=eq.${org}`)); assert.match(url, /merchant_id=eq.1/);
   }
   const ordersUrl = new URL(seen.find(url => url.includes('tossplace_orders?')));
-  assert.equal(ordersUrl.searchParams.get('ordered_at'), 'gte.2026-08-31T00:00:00+09:00');
-  assert.deepEqual(ordersUrl.searchParams.getAll('ordered_at'), ['gte.2026-08-31T00:00:00+09:00', 'lt.2026-09-14T00:00:00+09:00']);
+  assert.equal(ordersUrl.searchParams.get('ordered_at'), 'gte.2026-09-03T00:00:00+09:00');
+  assert.deepEqual(ordersUrl.searchParams.getAll('ordered_at'), ['gte.2026-09-03T00:00:00+09:00', 'lt.2026-09-17T00:00:00+09:00']);
   assert.equal(JSON.stringify(res.body).includes('raw_order'), false);
 });
 
