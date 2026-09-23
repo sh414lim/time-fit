@@ -1,7 +1,10 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 const headers = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Content-Type': 'application/json' }
-const permissionCodes = new Set(['dashboard.view','attendance.view','schedule.view','schedule.manage','leave.view','leave.review','payroll.view','employee.view'])
+const permissionCodes = new Set([
+  'dashboard.view','attendance.view','schedule.view','schedule.manage','leave.view','leave.review','payroll.view','employee.view',
+  'sales.view','sales.sync','settings.manage','finance.view','expense.manage','expense.receipt.review','expense.card.manage','expense.closeout.manage','expense.export',
+])
 
 Deno.serve(async request => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers })
@@ -28,6 +31,7 @@ Deno.serve(async request => {
     const status = String(body.status || '')
     const permissions = [...new Set((Array.isArray(body.permissions) ? body.permissions : []).map(String))]
     const categoryIds = [...new Set((Array.isArray(body.categoryIds) ? body.categoryIds : []).map(String))]
+    const costCenterIds = [...new Set((Array.isArray(body.costCenterIds) ? body.costCenterIds : []).map(String))]
     if (!['manager','executive_chef'].includes(roleCode) || !['active','suspended'].includes(status) || permissions.some(code => !permissionCodes.has(code))) throw new Error('invalid_management_account_input')
     const { error: updateError } = await admin.from('timefit_user_management_accounts').update({ role_code: roleCode, status, staff_id: body.staffId || null, updated_at: new Date().toISOString() }).eq('id', accountId)
     if (updateError) throw updateError
@@ -41,6 +45,12 @@ Deno.serve(async request => {
     if (scopeDeleteError) throw scopeDeleteError
     if (categoryIds.length) {
       const { error } = await admin.from('timefit_user_management_scopes').insert(categoryIds.map(categoryId => ({ management_account_id: accountId, category_id: categoryId })))
+      if (error) throw error
+    }
+    const { error: costCenterScopeDeleteError } = await admin.from('timefit_user_management_cost_center_scopes').delete().eq('management_account_id', accountId)
+    if (costCenterScopeDeleteError) throw costCenterScopeDeleteError
+    if (costCenterIds.length) {
+      const { error } = await admin.from('timefit_user_management_cost_center_scopes').insert(costCenterIds.map(costCenterId => ({ management_account_id: accountId, cost_center_id: costCenterId })))
       if (error) throw error
     }
     return new Response(JSON.stringify({ updated: true }), { headers })

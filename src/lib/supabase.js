@@ -244,7 +244,7 @@ export async function manageManagementAccount(payload) {
 
 export async function loadManagementAccounts(organizationId) {
   const client = requireClient();
-  const { data, error } = await client.from('timefit_user_management_accounts').select('id,user_id,staff_id,login_id,role_code,status,force_password_change,created_at,timefit_user_management_permissions(permission_code,allowed),timefit_user_management_scopes(category_id)').eq('organization_id', organizationId).order('created_at', { ascending: false });
+  const { data, error } = await client.from('timefit_user_management_accounts').select('id,user_id,staff_id,login_id,role_code,status,force_password_change,created_at,timefit_user_management_permissions(permission_code,allowed),timefit_user_management_scopes(category_id),timefit_user_management_cost_center_scopes(cost_center_id)').eq('organization_id', organizationId).order('created_at', { ascending: false });
   if (error) throw error; return data || [];
 }
 
@@ -432,9 +432,81 @@ export async function uploadFinanceDocument({ organizationId, documentType, titl
   if (error) { await client.storage.from('timefit-finance-documents').remove([path]); throw error; }
   return data;
 }
+const sha256File = async file => {
+  if (!globalThis.crypto?.subtle) return null;
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
+};
+
+export async function loadCostCenters(organizationId) {
+  const { data, error } = await requireClient().from('timefit_user_cost_centers').select('id,parent_id,center_type,name,code,staff_category_id,status,sort_order').eq('organization_id', organizationId).eq('status', 'active').order('sort_order').order('name');
+  if (error) throw error; return data || [];
+}
+export async function saveCostCenter({ id, organizationId, parentId, centerType, name, code, sortOrder = 0 }) {
+  const client = requireClient();
+  const payload = { organization_id: organizationId, parent_id: centerType === 'section' ? parentId : null, center_type: centerType, name: String(name || '').trim(), code: String(code || '').trim() || null, sort_order: Number(sortOrder || 0), status: 'active', updated_at: new Date().toISOString() };
+  if (!payload.name || !['department','section'].includes(centerType) || (centerType === 'section' && !parentId)) throw new Error('부서·섹션 정보를 확인해 주세요.');
+  const query = id ? client.from('timefit_user_cost_centers').update(payload).eq('id', id) : client.from('timefit_user_cost_centers').insert(payload);
+  const { data, error } = await query.select().single(); if (error) throw error; return data;
+}
+export async function archiveCostCenter(id) {
+  const { data, error } = await requireClient().from('timefit_user_cost_centers').update({ status: 'archived', updated_at: new Date().toISOString() }).eq('id', id).select().single();
+  if (error) throw error; return data;
+}
+
+export async function createReceiptSubmission({ organizationId, files, costCenterId, paymentMethod, staffId, submissionReason }) {
+  const client = requireClient(); const userId = (await client.auth.getUser()).data.user?.id;
+  const selected = Array.from(files || []).filter(Boolean);
+  if (!selected.length) throw new Error('촬영한 영수증을 선택해 주세요.');
+  if (selected.length > 20) throw new Error('영수증은 한 번에 20장까지 올릴 수 있어요.');
+  if (selected.some(file => !String(file.type || '').startsWith('image/'))) throw new Error('JPG, PNG, WebP 또는 HEIC 이미지만 올릴 수 있어요.');
+  if (selected.some(file => file.size > 20 * 1024 * 1024) || selected.reduce((sum, file) => sum + file.size, 0) > 60 * 1024 * 1024) throw new Error('이미지 한 장은 20MB, 전체는 60MB 이하만 올릴 수 있어요.');
+  if (!costCenterId) throw new Error('영수증을 사용할 부서·섹션을 선택해 주세요.');
+  const hashes = await Promise.all(selected.map(sha256File));
+  let contentSha256 = hashes.length === 1 ? hashes[0] : null;
+  if (hashes.every(Boolean) && globalThis.crypto?.subtle) {
+    const combined = new TextEncoder().encode(hashes.join('|'));
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', combined);
+    contentSha256 = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
+  }
+  if (contentSha256) {
+    const { data: duplicate, error: duplicateError } = await client.from('timefit_user_finance_documents').select('id,title,created_at').eq('organization_id', organizationId).eq('content_sha256', contentSha256).maybeSingle();
+    if (duplicateError) throw duplicateError;
+    if (duplicate) { const error = new Error('이미 등록된 영수증입니다. 기존 제출 내역을 확인해 주세요.'); error.code = 'duplicate_receipt'; error.documentId = duplicate.id; throw error; }
+  }
+  const sessionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const paths = selected.map((file, index) => `${organizationId}/${userId || 'employee'}/${sessionId}/${String(index + 1).padStart(2, '0')}-${file.name.replace(/[^a-zA-Z0-9가-힣._-]/g, '_')}`);
+  const uploaded = [];
+  try {
+    for (let index = 0; index < selected.length; index += 1) {
+      const { error } = await client.storage.from('timefit-finance-documents').upload(paths[index], selected[index], { contentType: selected[index].type || 'application/octet-stream', upsert: false });
+      if (error) throw error; uploaded.push(paths[index]);
+    }
+    const now = new Date();
+    const { data: document, error: documentError } = await client.from('timefit_user_finance_documents').insert({
+      organization_id: organizationId, document_type: 'receipt', title: `${now.toLocaleDateString('ko-KR')} 영수증`,
+      file_name: selected[0].name, storage_path: paths[0], mime_type: selected[0].type || null,
+      file_size: selected.reduce((sum, file) => sum + file.size, 0), content_sha256: contentSha256,
+      uploaded_by: userId, submitted_by_staff_id: staffId || null, submission_reason: submissionReason || null,
+      cost_center_id: costCenterId, payment_method: paymentMethod || null, review_status: 'submitted',
+      processing_status: 'uploaded', submitted_at: now.toISOString(), page_count: selected.length,
+      capture_metadata: { uploadSessionId: sessionId, source: 'employee_web' },
+    }).select().single();
+    if (documentError) throw documentError;
+    const { error: pagesError } = await client.from('timefit_user_finance_document_pages').insert(selected.map((file, index) => ({
+      organization_id: organizationId, document_id: document.id, page_number: index + 1, storage_path: paths[index],
+      mime_type: file.type || null, file_size: file.size, content_sha256: hashes[index],
+    })));
+    if (pagesError) { await client.from('timefit_user_finance_documents').delete().eq('id', document.id); throw pagesError; }
+    return document;
+  } catch (error) {
+    if (uploaded.length) await client.storage.from('timefit-finance-documents').remove(uploaded).catch(() => {});
+    throw error;
+  }
+}
 export async function loadMyReceiptDocuments(organizationId) {
   const client = requireClient(); const userId = (await client.auth.getUser()).data.user?.id;
-  const { data, error } = await client.from('timefit_user_finance_documents').select('id,title,file_name,processing_status,processing_error,extracted_data,created_at').eq('organization_id', organizationId).eq('document_type', 'receipt').eq('uploaded_by', userId).order('created_at', { ascending: false }).limit(20);
+  const { data, error } = await client.from('timefit_user_finance_documents').select('id,title,file_name,processing_status,review_status,processing_error,extracted_data,cost_center_id,payment_method,change_request_reason,page_count,created_at').eq('organization_id', organizationId).eq('document_type', 'receipt').eq('uploaded_by', userId).order('created_at', { ascending: false }).limit(40);
   if (error) throw error; return data || [];
 }
 export async function loadMyExpenseReceiptReminders(organizationId, staffId) {
@@ -458,11 +530,17 @@ export async function createManualExpense(input) {
   return cardConnectionRequest('expenses', { method: 'POST', body: input });
 }
 export async function processReceiptDocument({ organizationId, documentId }) {
-  const payload = await cardConnectionRequest('receipt-process', { method: 'POST', body: { organizationId, documentId } });
+  const payload = await cardConnectionRequest('receipt-process', { method: 'POST', body: { organizationId, documentId, action: 'enqueue' } });
   return payload;
 }
-export async function loadExpenseReviewQueue(organizationId, status = 'attention') {
-  const payload = await cardConnectionRequest('expense-review', { query: { organizationId, status } });
+export async function loadReceiptSubmission({ organizationId, documentId }) {
+  return cardConnectionRequest('receipt-process', { query: { organizationId, documentId } });
+}
+export async function confirmReceiptSubmission({ organizationId, documentId, patch }) {
+  return cardConnectionRequest('receipt-process', { method: 'PATCH', body: { organizationId, documentId, action: 'submitter_confirm', patch } });
+}
+export async function loadExpenseReviewQueue(organizationId, status = 'attention', costCenterId = '') {
+  const payload = await cardConnectionRequest('expense-review', { query: { organizationId, status, ...(costCenterId ? { costCenterId } : {}) } });
   return payload.documents || [];
 }
 export async function reviewExpenseMatch({ organizationId, matchId, action }) {
@@ -471,6 +549,14 @@ export async function reviewExpenseMatch({ organizationId, matchId, action }) {
 }
 export async function bulkConfirmExpenseMatches({ organizationId, matchIds }) {
   return cardConnectionRequest('expense-review', { method: 'POST', body: { organizationId, action: 'bulk_confirm', matchIds } });
+}
+export async function requestReceiptChange({ organizationId, documentId, reason }) {
+  const payload = await cardConnectionRequest('expense-review', { method: 'POST', body: { organizationId, documentId, reason, action: 'request_change' } });
+  return payload.result;
+}
+export async function approveReceiptExpense({ organizationId, documentId, expenseId }) {
+  const payload = await cardConnectionRequest('expense-review', { method: 'POST', body: { organizationId, documentId, expenseId, action: 'approve_receipt' } });
+  return payload.result;
 }
 export async function updateExpenseDraft({ organizationId, expenseId, transactionDate, totalAmount, merchantName, merchantBusinessNumber, category, reason, rememberRule }) {
   const payload = await cardConnectionRequest('expense-review', { method: 'PATCH', body: { organizationId, expenseId, transactionDate, totalAmount, merchantName, merchantBusinessNumber, category, reason, rememberRule } });

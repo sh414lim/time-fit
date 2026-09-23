@@ -18,6 +18,7 @@ Deno.serve(async request => {
     const roleCode = String(body.roleCode || '')
     const permissions = Array.isArray(body.permissions) ? body.permissions : []
     const categoryIds = Array.isArray(body.categoryIds) ? body.categoryIds : []
+    const costCenterIds = Array.isArray(body.costCenterIds) ? body.costCenterIds : []
     if (!organizationId || !/^[a-z0-9._-]{4,30}$/.test(loginId) || password.length < 8 || !displayName || !['manager','executive_chef'].includes(roleCode)) throw new Error('invalid_management_account_input')
     const { data: organization } = await admin.from('timefit_user_organizations').select('owner_id').eq('id', organizationId).maybeSingle()
     const { data: managerMembership } = await admin.from('timefit_user_memberships').select('role').eq('organization_id', organizationId).eq('user_id', caller.user.id).maybeSingle()
@@ -34,6 +35,7 @@ Deno.serve(async request => {
       if (accountError) throw accountError
       if (permissions.length) await admin.from('timefit_user_management_permissions').insert(permissions.map((permissionCode: string) => ({ management_account_id: account.id, permission_code: permissionCode, allowed: true })))
       if (categoryIds.length) await admin.from('timefit_user_management_scopes').insert(categoryIds.map((categoryId: string) => ({ management_account_id: account.id, category_id: categoryId })))
+      if (costCenterIds.length) await admin.from('timefit_user_management_cost_center_scopes').insert(costCenterIds.map((costCenterId: string) => ({ management_account_id: account.id, cost_center_id: costCenterId })))
       return new Response(JSON.stringify({ account: { ...account, display_name: displayName }, loginId, loginEmail: email }), { headers })
     } catch (error) {
       await admin.auth.admin.deleteUser(userId)
