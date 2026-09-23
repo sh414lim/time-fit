@@ -1,4 +1,5 @@
 import { decryptSecret } from './_integration-crypto.js';
+import { authorizeFinance } from './_finance-server.js';
 
 const TOSS_API = "https://open-api.tossplace.com/api-public/openapi/v1";
 
@@ -8,19 +9,29 @@ function isAuthorized(req) {
 }
 
 async function authorizeManager(req, organizationId) {
-  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
-  if (!token || !organizationId) return false;
-  const headers = { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${token}` };
-  const userResponse = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, { headers });
-  if (!userResponse.ok) return false;
-  const user = await userResponse.json();
-  const membershipResponse = await fetch(`${process.env.SUPABASE_URL}/rest/v1/timefit_user_memberships?organization_id=eq.${encodeURIComponent(organizationId)}&user_id=eq.${encodeURIComponent(user.id)}&role=eq.manager&select=organization_id`, { headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}` } });
-  if (!membershipResponse.ok) return false;
-  return (await membershipResponse.json()).length > 0;
+  return Boolean(await authorizeFinance(req, organizationId, { permissionsAny: ['sales.sync'] }));
 }
 
 function asDate(value) {
   return value && !Number.isNaN(Date.parse(value)) ? value : null;
+}
+
+export function normalizeSalesSyncRange(from, to) {
+  const pattern = /^\d{4}-\d{2}-\d{2}$/;
+  if (!from && !to) return null;
+  if (!pattern.test(from || '') || !pattern.test(to || '')) throw new Error('동기화 기간은 시작일과 종료일을 모두 선택해 주세요.');
+  const start = new Date(`${from}T00:00:00+09:00`);
+  const end = new Date(`${to}T23:59:59.999+09:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) throw new Error('동기화 기간을 확인해 주세요.');
+  if (end.getTime() - start.getTime() > 366 * 86400000) throw new Error('한 번에 동기화할 수 있는 기간은 최대 1년입니다.');
+  return { from: start.toISOString(), to: end.toISOString() };
+}
+
+export function dailySalesSyncRange(now = new Date()) {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(now);
+  const start = new Date(`${today}T00:00:00+09:00`);
+  const cutoff = new Date(`${today}T22:00:00+09:00`);
+  return { from: new Date(start.getTime() - 86400000).toISOString(), to: new Date(Math.min(+now, +cutoff)).toISOString() };
 }
 
 function normalizeOrder(order, merchantId, organizationId) {
@@ -70,7 +81,29 @@ async function saveSyncState(state) {
   if (!response.ok) throw new Error(`Supabase sync state write failed: ${response.status}`);
 }
 
-async function refreshDailySalesSummary(organizationId, merchantId) {
+async function createSyncRun({ organizationId, merchantId, mode, range }) {
+  const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/timefit_user_sales_sync_runs`, {
+    method: 'POST',
+    headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
+    body: JSON.stringify([{ organization_id: organizationId, merchant_id: Number(merchantId), requested_mode: mode, window_from: range.from, window_to: range.to }]),
+  });
+  if (!response.ok) throw new Error(`Supabase sync run write failed: ${response.status}`);
+  return (await response.json())[0];
+}
+
+async function updateSyncRun(id, patch) {
+  if (!id) return;
+  const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/timefit_user_sales_sync_runs?id=eq.${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify({ ...patch, updated_at: new Date().toISOString() }),
+  });
+  if (!response.ok) throw new Error(`Supabase sync run update failed: ${response.status}`);
+}
+
+const kstDateFor = value => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date(value));
+
+async function refreshDailySalesSummary(organizationId, merchantId, range) {
   const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/rpc/timefit_user_refresh_tossplace_daily_sales`, {
     method: 'POST',
     headers: {
@@ -78,7 +111,7 @@ async function refreshDailySalesSummary(organizationId, merchantId) {
       Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ p_organization_id: organizationId, p_merchant_id: Number(merchantId) }),
+    body: JSON.stringify({ p_organization_id: organizationId, p_merchant_id: Number(merchantId), p_from: kstDateFor(range.from), p_to: kstDateFor(range.to) }),
   });
   if (!response.ok) throw new Error(`Supabase daily summary refresh failed: ${response.status}`);
 }
@@ -96,35 +129,43 @@ async function readConnections(organizationId) {
   return rows;
 }
 
-async function syncConnection({ organizationId, merchantId, page, size, mode, credentialSource, encryptedAccessKey, encryptedAccessSecret }) {
+async function syncConnection({ organizationId, merchantId, page, size, mode, range, credentialSource, encryptedAccessKey, encryptedAccessSecret }) {
   const accessKey = credentialSource === 'custom' ? decryptSecret(encryptedAccessKey) : process.env.TOSSPLACE_ACCESS_KEY;
   const accessSecret = credentialSource === 'custom' ? decryptSecret(encryptedAccessSecret) : process.env.TOSSPLACE_ACCESS_SECRET;
   if (!accessKey || !accessSecret) throw new Error('Toss Place credentials are unavailable');
-  const params = new URLSearchParams({ page: String(page), size: String(size), sortOrder: 'DESC' });
-  if (mode === 'daily') params.set('from', new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
+  const fetchRange = range || dailySalesSyncRange();
+  const run = await createSyncRun({ organizationId, merchantId, mode, range: fetchRange });
   await saveSyncState({ merchant_id: Number(merchantId), organization_id: organizationId, last_sync_started_at: new Date().toISOString(), last_sync_error: null, updated_at: new Date().toISOString() });
-  const response = await fetch(`${TOSS_API}/merchants/${merchantId}/order/orders?${params}`, {
-    headers: { 'x-access-key': accessKey, 'x-secret-key': accessSecret, 'Content-Type': 'application/json' },
-  });
-  const body = await response.json().catch(() => null);
-  if (!response.ok || body?.resultType !== 'SUCCESS') {
-    const detail = String(body?.error?.message || body?.message || body?.errorCode || '').slice(0, 160);
-    if (response.status === 401) throw new Error('Toss Place 인증에 실패했습니다. Access Key·Secret과 POS 서비스 코드 연결을 확인해 주세요.');
-    if (response.status === 403) throw new Error('Toss Place 주문 조회 권한이 없습니다. 해당 앱에 매장 주문 조회 권한이 있는지 확인해 주세요.');
-    if (response.status === 404) throw new Error('Toss Place 판매점 ID 또는 주문 조회 경로를 확인해 주세요.');
-    throw new Error(detail ? `Toss Place 주문 조회 실패 (${response.status}): ${detail}` : `Toss Place 주문 조회 실패 (${response.status})`);
+  let currentPage = page; let pagesFetched = 0; let synchronized = 0; let pageComplete = false;
+  try {
+    for (let batch = 0; batch < 100; batch += 1) {
+      const params = new URLSearchParams({ page: String(currentPage), size: String(size), sortOrder: 'DESC', from: fetchRange.from, to: fetchRange.to });
+      const response = await fetch(`${TOSS_API}/merchants/${merchantId}/order/orders?${params}`, { headers: { 'x-access-key': accessKey, 'x-secret-key': accessSecret, 'Content-Type': 'application/json' } });
+      const body = await response.json().catch(() => null);
+      if (!response.ok || body?.resultType !== 'SUCCESS') {
+        const detail = String(body?.error?.message || body?.message || body?.errorCode || '').slice(0, 160);
+        if (response.status === 401) throw new Error('Toss Place 인증에 실패했습니다. Access Key·Secret과 POS 서비스 코드 연결을 확인해 주세요.');
+        if (response.status === 403) throw new Error('Toss Place 주문 조회 권한이 없습니다. 해당 앱에 매장 주문 조회 권한이 있는지 확인해 주세요.');
+        if (response.status === 404) throw new Error('Toss Place 판매점 ID 또는 주문 조회 경로를 확인해 주세요.');
+        throw new Error(detail ? `Toss Place 주문 조회 실패 (${response.status}): ${detail}` : `Toss Place 주문 조회 실패 (${response.status})`);
+      }
+      const orders = Array.isArray(body.success) ? body.success : (body.success?.items ?? []);
+      await upsertOrders(orders.filter(order => order?.id).map(order => normalizeOrder(order, merchantId, organizationId)));
+      pagesFetched += 1; synchronized += orders.length;
+      if (orders.length < size) { pageComplete = true; break; }
+      currentPage += 1;
+    }
+    if (!pageComplete) throw new Error('Toss Place 주문 수집 상한에 도달했습니다. 기간을 나눠 다시 수집해 주세요.');
+    await refreshDailySalesSummary(organizationId, merchantId, fetchRange);
+    const completedAt = new Date().toISOString();
+    await updateSyncRun(run.id, { status: 'succeeded', completed_at: completedAt, pages_fetched: pagesFetched, orders_received: synchronized, page_complete: true, summary_refresh_completed: true });
+    await saveSyncState({ merchant_id: Number(merchantId), organization_id: organizationId, last_successful_sync_at: completedAt, last_successful_window_from: fetchRange.from, last_successful_window_to: fetchRange.to, last_sync_started_at: completedAt, last_sync_error: null, updated_at: completedAt });
+    await fetch(`${process.env.SUPABASE_URL}/rest/v1/timefit_user_tossplace_connections?organization_id=eq.${encodeURIComponent(organizationId)}`, { method: 'PATCH', headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' }, body: JSON.stringify({ connection_status: 'connected', last_synced_at: completedAt, last_error: null }) });
+    return { synchronized, runId: run.id, pagesFetched, pageComplete: true, window: fetchRange };
+  } catch (error) {
+    await updateSyncRun(run.id, { status: synchronized ? 'partial' : 'failed', completed_at: new Date().toISOString(), pages_fetched: pagesFetched, orders_received: synchronized, page_complete: false, error_code: 'toss_sync_failed', error_message: String(error.message || error).slice(0, 300) }).catch(() => {});
+    throw error;
   }
-  const orders = Array.isArray(body.success) ? body.success : (body.success?.items ?? []);
-  await upsertOrders(orders.filter(order => order?.id).map(order => normalizeOrder(order, merchantId, organizationId)));
-  // Aggregation happens during background sync, never when a manager opens
-  // the sales page. This keeps the dashboard read path consistently light.
-  await refreshDailySalesSummary(organizationId, merchantId);
-  await saveSyncState({ merchant_id: Number(merchantId), organization_id: organizationId, last_successful_sync_at: new Date().toISOString(), last_sync_started_at: new Date().toISOString(), last_sync_error: null, updated_at: new Date().toISOString() });
-  await fetch(`${process.env.SUPABASE_URL}/rest/v1/timefit_user_tossplace_connections?organization_id=eq.${encodeURIComponent(organizationId)}`, {
-    method: 'PATCH', headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-    body: JSON.stringify({ connection_status: 'connected', last_synced_at: new Date().toISOString(), last_error: null }),
-  });
-  return orders.length;
 }
 
 async function markConnectionError(organizationId, message) {
@@ -156,17 +197,21 @@ export default async function handler(req, res) {
 
   const page = Math.max(1, Number.parseInt(req.query.page ?? "1", 10) || 1);
   const size = Math.min(500, Math.max(1, Number.parseInt(req.query.size ?? "500", 10) || 500));
-  const mode = req.query.mode === "backfill" ? "backfill" : "daily";
+  const requestedMode = req.query.mode ?? req.body?.mode;
+  const mode = requestedMode === 'backfill' ? 'backfill' : requestedMode === 'range' ? 'range' : 'daily';
+  const requestedFrom = req.query.from ?? req.body?.from;
+  const requestedTo = req.query.to ?? req.body?.to;
   const organizationId = cronRequest ? requestedOrganizationId : requestedOrganizationId;
 
   try {
+    const range = normalizeSalesSyncRange(requestedFrom, requestedTo);
     const connections = await readConnections(organizationId);
     if (!connections.length) return res.status(200).json({ ok: true, mode, synchronized: 0, stores: 0, message: 'No enabled Toss Place store connection' });
     const results = [];
     for (const connection of connections) {
       if (!connection.merchant_id) continue;
-      const count = await syncConnection({ organizationId: connection.organization_id, merchantId: connection.merchant_id, page, size, mode, credentialSource: connection.credential_source, encryptedAccessKey: connection.encrypted_access_key, encryptedAccessSecret: connection.encrypted_access_secret });
-      results.push({ organizationId: connection.organization_id, synchronized: count });
+      const result = await syncConnection({ organizationId: connection.organization_id, merchantId: connection.merchant_id, page, size, mode, range, credentialSource: connection.credential_source, encryptedAccessKey: connection.encrypted_access_key, encryptedAccessSecret: connection.encrypted_access_secret });
+      results.push({ organizationId: connection.organization_id, ...result });
     }
     return res.status(200).json({ ok: true, mode, page, synchronized: results.reduce((sum, item) => sum + item.synchronized, 0), stores: results.length, results });
   } catch (error) {

@@ -50,30 +50,31 @@ test('rejected schedules, approved full leave, current dates, overlapping issues
 });
 function salesFixture() {
   const range = lastCompleteWeek('2026-09-17');
-  const orders = Array.from({ length: 14 }, (_, i) => ({ ordered_at: `${addDays(range.previousFrom, i)}T12:00:00+09:00`, state: 'COMPLETED', total_amount: i < 7 ? 100 : 200, raw_order: { lineItems: [{ item: { title: '메뉴' }, itemPrice: { priceValue: 100 }, quantity: i < 7 ? 1 : 2 }, { item: { title: '무료 옵션' }, itemPrice: { priceValue: 0 }, quantity: 1 }] } }));
+  const orders = Array.from({ length: 14 }, (_, i) => ({ order_id: `order-${i}`, ordered_at: `${addDays(range.previousFrom, i)}T12:00:00+09:00`, state: 'COMPLETED', total_amount: i < 7 ? 100 : 200, raw_order: { lineItems: [{ item: { title: '메뉴', code: 'menu-1', category: { title: '식사' } }, itemPrice: { priceValue: 100 }, quantity: i < 7 ? 1 : 2 }, { item: { title: '무료 옵션' }, itemPrice: { priceValue: 0 }, quantity: 1 }] } }));
   const daily = orders.map(order => ({ sales_date: kstDate(order.ordered_at), order_count: 1 }));
-  return { range, orders, daily, connection: { merchant_id: 1, last_synced_at: '2026-09-14T00:00:00+09:00' } };
+  const syncRuns = [{ status: 'succeeded', page_complete: true, window_from: `${range.previousFrom}T00:00:00+09:00`, window_to: `${range.to}T23:59:59.999+09:00` }];
+  return { range, orders, daily, syncRuns, connection: { merchant_id: 1, last_synced_at: '2026-09-14T00:00:00+09:00' } };
 }
 test('completed orders only, matched daily coverage and paid menu quantities', () => {
   const f = salesFixture();
   f.orders.push({ ...f.orders[13], state: 'CANCELLED', total_amount: 9999 }); f.daily[13].order_count++;
-  const result = weeklySales(f.orders, f.daily, f.range, f.connection);
+  const result = weeklySales(f.orders, f.daily, f.range, f.connection, f.syncRuns);
   assert.equal(result.comparable, true);
   assert.equal(result.current.revenue, 1400);
   assert.equal(result.current.orders, 7);
   assert.equal(result.current.average, 200);
-  assert.deepEqual(result.menus, [{ name: '메뉴', quantity: 14, previous: 7 }]);
+  assert.equal(result.menus[0].name, '메뉴'); assert.equal(result.menus[0].quantity, 14); assert.equal(result.menus[0].previous, 7); assert.equal(result.menus[0].code, 'menu-1');
   assert.equal(JSON.stringify(result).includes('raw_order'), false);
 });
 test('missing days and incomplete pagination suppress comparisons instead of assuming zero', () => {
   const f = salesFixture();
-  for (const [orders, daily, connection] of [[f.orders, f.daily.slice(1), f.connection], [f.orders.slice(1), f.daily, f.connection], [f.orders, f.daily, { ...f.connection, last_synced_at: '2026-09-12T00:00:00Z' }]]) {
-    const result = weeklySales(orders, daily, f.range, connection);
+  for (const [orders, daily, runs] of [[f.orders, f.daily.slice(1), f.syncRuns], [f.orders.slice(1), f.daily, f.syncRuns], [f.orders, f.daily, []]]) {
+    const result = weeklySales(orders, daily, f.range, f.connection, runs);
     assert.equal(result.comparable, false);
     assert.equal(result.menus[0].previous, null);
   }
   f.orders[0].raw_order = {};
-  const result = weeklySales(f.orders, f.daily, f.range, f.connection);
+  const result = weeklySales(f.orders, f.daily, f.range, f.connection, f.syncRuns);
   assert.equal(result.comparable, true);
   assert.equal(result.menuComparable, false);
   assert.equal(result.menus[0].previous, null);
@@ -95,6 +96,25 @@ test('API denies unauthenticated and delegated managers before financial queries
   res = response(); await handler({ method: 'GET', headers: { authorization: 'Bearer test' }, query: { organizationId: org, scope: 'tasks' } }, res);
   assert.equal(res.statusCode, 403); assert.equal(seen.length, 2);
   assert.equal(seen.some(url => /card|payroll|tossplace/.test(url)), false);
+});
+test('weekly sales requires an active delegated sales.view permission', async t => {
+  process.env.SUPABASE_URL = 'https://test'; process.env.SUPABASE_SERVICE_ROLE_KEY = 'test';
+  let allowed = false;
+  t.mock.method(globalThis, 'fetch', async url => {
+    let body = [];
+    if (url.includes('/auth/')) body = { id: 'delegate' };
+    else if (url.includes('organizations?')) body = [{ id: org, owner_id: 'owner' }];
+    else if (url.includes('memberships?')) body = [{ organization_id: org }];
+    else if (url.includes('management_accounts?')) body = [{ id: 'account-1' }];
+    else if (url.includes('management_permissions?')) body = allowed ? [{ permission_code: 'sales.view' }] : [];
+    return new Response(JSON.stringify(body));
+  });
+  let res = response();
+  await handler({ method: 'GET', headers: { authorization: 'Bearer test' }, query: { organizationId: org, scope: 'weekly', from: 'invalid' } }, res);
+  assert.equal(res.statusCode, 403);
+  allowed = true; res = response();
+  await handler({ method: 'GET', headers: { authorization: 'Bearer test' }, query: { organizationId: org, scope: 'weekly', from: 'invalid' } }, res);
+  assert.equal(res.statusCode, 400);
 });
 test('owner receives date-scoped unreviewed card groups and a separate payroll snapshot', async t => {
   process.env.SUPABASE_URL = 'https://test'; process.env.SUPABASE_SERVICE_ROLE_KEY = 'test';
@@ -148,6 +168,7 @@ test('weekly API scopes every order and cache read by both organization and conn
     else if (url.includes('organizations?')) body = [{ id: org, owner_id: 'owner' }];
     else if (url.includes('connections?')) body = [f.connection];
     else if (url.includes('daily_sales?')) body = f.daily;
+    else if (url.includes('sales_sync_runs?')) body = f.syncRuns;
     else if (url.includes('tossplace_orders?')) body = f.orders;
     else throw new Error('Unexpected data access');
     return new Response(JSON.stringify(body));

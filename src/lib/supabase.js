@@ -339,10 +339,10 @@ export async function loadOrganizationSalesDashboard(organizationId, filters = {
   rememberSalesDashboard(cacheKey, { data: body, cachedAt: Date.now() });
   return body;
 }
-export async function syncOrganizationSales(organizationId) {
+export async function syncOrganizationSales(organizationId, options = {}) {
   const client = requireClient(); const { data: { session } } = await client.auth.getSession();
   if (!session?.access_token) throw new Error('로그인이 필요합니다.');
-  const response = await fetch('/api/sync-sales', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` }, body: JSON.stringify({ organizationId }) });
+  const response = await fetch('/api/sync-sales', { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` }, body: JSON.stringify({ organizationId, ...options }) });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || '매출 동기화를 완료하지 못했습니다.');
   return body;

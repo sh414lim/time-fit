@@ -21,7 +21,7 @@ export async function authenticatedUser(req) {
   return { user: await response.json(), token };
 }
 
-export async function authorizeFinance(req, organizationId, { ownerOnly = false } = {}) {
+export async function authorizeFinance(req, organizationId, { ownerOnly = false, permissionsAny = [] } = {}) {
   if (!organizationId) return null;
   const auth = await authenticatedUser(req);
   if (!auth?.user?.id) return null;
@@ -34,7 +34,15 @@ export async function authorizeFinance(req, organizationId, { ownerOnly = false 
   if (ownerOnly) return null;
   const membershipResponse = await fetch(`${process.env.SUPABASE_URL}/rest/v1/timefit_user_memberships?organization_id=eq.${encodeURIComponent(organizationId)}&user_id=eq.${encodeURIComponent(auth.user.id)}&role=eq.manager&select=organization_id`, { headers: serviceHeaders() });
   const memberships = membershipResponse.ok ? await membershipResponse.json() : [];
-  return memberships.length ? { ...auth, isOwner: false } : null;
+  if (!memberships.length) return null;
+  if (!permissionsAny.length) return { ...auth, isOwner: false };
+  const accountResponse = await fetch(`${process.env.SUPABASE_URL}/rest/v1/timefit_user_management_accounts?organization_id=eq.${encodeURIComponent(organizationId)}&user_id=eq.${encodeURIComponent(auth.user.id)}&status=eq.active&select=id&limit=1`, { headers: serviceHeaders() });
+  const accounts = accountResponse.ok ? await accountResponse.json() : [];
+  if (!accounts[0]?.id) return null;
+  const requested = permissionsAny.map(code => `permission_code.eq.${encodeURIComponent(code)}`).join(',');
+  const permissionResponse = await fetch(`${process.env.SUPABASE_URL}/rest/v1/timefit_user_management_permissions?management_account_id=eq.${encodeURIComponent(accounts[0].id)}&allowed=eq.true&or=(${requested})&select=permission_code`, { headers: serviceHeaders() });
+  const permissions = permissionResponse.ok ? await permissionResponse.json() : [];
+  return permissions.length ? { ...auth, isOwner: false, permissions: permissions.map(item => item.permission_code) } : null;
 }
 
 export async function authorizeOrganizationMember(req, organizationId) {

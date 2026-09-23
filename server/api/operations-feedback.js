@@ -19,11 +19,12 @@ export async function loadWeeklyFeedback(organizationId, range) {
   const connection = connections[0];
   if (!connection?.merchant_id) return weeklySales([], [], range, null);
   const merchant = `merchant_id=eq.${encodeURIComponent(connection.merchant_id)}`;
-  const [orders, daily] = await Promise.all([
+  const [orders, daily, syncRuns] = await Promise.all([
     readAll(`tossplace_orders?${org}&${merchant}&ordered_at=gte.${encodeURIComponent(`${range.previousFrom}T00:00:00+09:00`)}&ordered_at=lt.${encodeURIComponent(`${addDays(range.to, 1)}T00:00:00+09:00`)}&select=order_id,ordered_at,state,total_amount,raw_order&order=order_id.asc`),
-    financeRest(`timefit_user_tossplace_daily_sales?${org}&${merchant}&sales_date=gte.${range.previousFrom}&sales_date=lte.${range.to}&select=sales_date,order_count`),
+    financeRest(`timefit_user_tossplace_daily_sales?${org}&${merchant}&sales_date=gte.${range.previousFrom}&sales_date=lte.${range.to}&select=sales_date,order_count,completed_order_count,completed_amount,cancelled_count,finalization_status,revision_number,last_source_synced_at`),
+    financeRest(`timefit_user_sales_sync_runs?${org}&${merchant}&status=eq.succeeded&select=id,window_from,window_to,page_complete,status,completed_at,orders_received,pages_fetched&order=completed_at.desc&limit=50`),
   ]);
-  return weeklySales(orders, daily, range, connection);
+  return weeklySales(orders, daily, range, connection, syncRuns);
 }
 
 export default async function handler(req, res) {
@@ -33,8 +34,8 @@ export default async function handler(req, res) {
   const { organizationId, scope = 'weekly', from } = req.query || {};
   if (typeof organizationId !== 'string' || !/^[0-9a-f-]{36}$/i.test(organizationId) || !['weekly', 'tasks', 'cards'].includes(scope)) return res.status(400).json({ ok: false, error: '조회 조건을 확인해 주세요.' });
   try {
-    const auth = await authorizeFinance(req, organizationId, { ownerOnly: true });
-    if (!auth) return res.status(req.headers.authorization ? 403 : 401).json({ ok: false, error: '최고관리자 권한이 필요합니다.' });
+    const auth = await authorizeFinance(req, organizationId, scope === 'weekly' ? { permissionsAny: ['sales.view'] } : { ownerOnly: true });
+    if (!auth) return res.status(req.headers.authorization ? 403 : 401).json({ ok: false, error: scope === 'weekly' ? '매출 조회 권한이 필요합니다.' : '최고관리자 권한이 필요합니다.' });
     const today = kstDate();
     const org = `organization_id=eq.${encodeURIComponent(organizationId)}`;
     if (scope === 'weekly') {
