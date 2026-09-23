@@ -454,7 +454,7 @@ export async function archiveCostCenter(id) {
   if (error) throw error; return data;
 }
 
-export async function createReceiptSubmission({ organizationId, files, costCenterId, paymentMethod, staffId, submissionReason }) {
+export async function createReceiptSubmission({ organizationId, files, costCenterId, paymentMethod, staffId, submissionReason, source = 'employee_web' }) {
   const client = requireClient(); const userId = (await client.auth.getUser()).data.user?.id;
   const selected = Array.from(files || []).filter(Boolean);
   if (!selected.length) throw new Error('촬영한 영수증을 선택해 주세요.');
@@ -490,7 +490,7 @@ export async function createReceiptSubmission({ organizationId, files, costCente
       uploaded_by: userId, submitted_by_staff_id: staffId || null, submission_reason: submissionReason || null,
       cost_center_id: costCenterId, payment_method: paymentMethod || null, review_status: 'submitted',
       processing_status: 'uploaded', submitted_at: now.toISOString(), page_count: selected.length,
-      capture_metadata: { uploadSessionId: sessionId, source: 'employee_web' },
+      capture_metadata: { uploadSessionId: sessionId, source },
     }).select().single();
     if (documentError) throw documentError;
     const { error: pagesError } = await client.from('timefit_user_finance_document_pages').insert(selected.map((file, index) => ({

@@ -19,7 +19,7 @@ import ExpenseReminderSettings from './features/finance/ExpenseReminderSettings'
 import ExpenseLedger from './features/finance/ExpenseLedger';
 import ManualExpenseForm from './features/finance/ManualExpenseForm';
 import { processReceiptDocument } from './lib/supabase';
-import { acceptEmployeeInvitation, activateTabletDevice, archiveCostCenter, bootstrapTossPlaceConnection, createCorporateCard, createFeedbackItem, createLeaveRequest, createManagementAccount, createManualStaff, createMeetingNote, deleteFinanceDocument, deleteStaffCategory, deleteWorkSchedule, disconnectCorporateCard, ensureManagerOrganization, getAuthContext, getCachedOrganizationSalesDashboard, getManagerTabletOrganization, getOrganizationSettings, getTabletDeviceContext, getTossPlaceConnection, grantStaffLeave, importCardTransactions, importFeedbackItems, inviteEmployeeByCode, isAuthSessionError, loadCardTransactions, loadCorporateCards, loadCostCenters, loadFeedbackItems, loadFinanceDocuments, loadManagementAccounts, loadMeetingNotes, loadOperationalAlerts, loadOrganizationSalesDashboard, loadPayrollWorkspace, loadStaffCategories, loadStaffSensitiveProfile, loadTabletDevices, loadWorkforce, manageManagementAccount, markOperationalAlertRead, openFinanceDocument, previewTabletLeaveRequest, recordQrAttendance, reviewLeaveRequest, reviewWorkSchedule, revokeTabletDevice, runMonthEndOperations, saveCostCenter, saveCustomTossPlaceCredentials, saveOrganizationSettings, savePayrollContract, savePayrollDraft, saveStaffCategory, saveStaffOrder, saveStaffSensitiveProfile, saveTossPlaceConnection, saveWorkSchedule, saveWorkSchedulesBulk, sendSettlementEmail, signIn, signOut, signUp, supabase, syncOrganizationSales, tabletAttendance, tabletLeaveRequest, updateCorporateCard, updateFeedbackItem, updateStaffPhone, updateStaffProfile, uploadFinanceDocument, uploadStaffAvatar } from './lib/supabase';
+import { acceptEmployeeInvitation, activateTabletDevice, archiveCostCenter, bootstrapTossPlaceConnection, createCorporateCard, createFeedbackItem, createLeaveRequest, createManagementAccount, createManualStaff, createMeetingNote, createReceiptSubmission, deleteFinanceDocument, deleteStaffCategory, deleteWorkSchedule, disconnectCorporateCard, ensureManagerOrganization, getAuthContext, getCachedOrganizationSalesDashboard, getManagerTabletOrganization, getOrganizationSettings, getTabletDeviceContext, getTossPlaceConnection, grantStaffLeave, importCardTransactions, importFeedbackItems, inviteEmployeeByCode, isAuthSessionError, loadCardTransactions, loadCorporateCards, loadCostCenters, loadFeedbackItems, loadFinanceDocuments, loadManagementAccounts, loadMeetingNotes, loadOperationalAlerts, loadOrganizationSalesDashboard, loadPayrollWorkspace, loadStaffCategories, loadStaffSensitiveProfile, loadTabletDevices, loadWorkforce, manageManagementAccount, markOperationalAlertRead, openFinanceDocument, previewTabletLeaveRequest, recordQrAttendance, reviewLeaveRequest, reviewWorkSchedule, revokeTabletDevice, runMonthEndOperations, saveCostCenter, saveCustomTossPlaceCredentials, saveOrganizationSettings, savePayrollContract, savePayrollDraft, saveStaffCategory, saveStaffOrder, saveStaffSensitiveProfile, saveTossPlaceConnection, saveWorkSchedule, saveWorkSchedulesBulk, sendSettlementEmail, signIn, signOut, signUp, supabase, syncOrganizationSales, tabletAttendance, tabletLeaveRequest, updateCorporateCard, updateFeedbackItem, updateStaffPhone, updateStaffProfile, uploadFinanceDocument, uploadStaffAvatar } from './lib/supabase';
 
 const KOREAN_WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 const currentKoreanDateKey = () => {
@@ -877,9 +877,37 @@ const EXPENSE_SECTIONS = [
   ['overview', '현황'], ['ledger', '지출 원장'], ['evidence', '증빙 검토'], ['cards', '법인카드'], ['settlement', '결산·문서'],
 ];
 
+function ManagerReceiptUpload({ organizationId, onClose, onUploaded }) {
+  const [centers, setCenters] = useState([]); const [files, setFiles] = useState([]); const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
+  useEffect(() => { loadCostCenters(organizationId).then(setCenters).catch(error => setMessage(error.message || '부서·섹션을 불러오지 못했습니다.')); }, [organizationId]);
+  const submit = async event => {
+    event.preventDefault(); if (!files.length) return setMessage('영수증 사진을 선택해 주세요.');
+    const form = new FormData(event.currentTarget); setBusy(true); setMessage('영수증 원본을 저장하고 있어요.');
+    try {
+      const document = await createReceiptSubmission({ organizationId, files, costCenterId: form.get('costCenterId'), paymentMethod: form.get('paymentMethod'), submissionReason: String(form.get('reason') || '').trim(), source: 'manager_web' });
+      await processReceiptDocument({ organizationId, documentId: document.id });
+      onUploaded();
+    } catch (error) { setMessage(error.message || '영수증을 업로드하지 못했습니다.'); }
+    finally { setBusy(false); }
+  };
+  return <Modal title="영수증 업로드" onClose={busy ? undefined : onClose} variant="manager-receipt-modal">
+    <p className="modal-text">총관리자가 영수증 원본을 직접 등록합니다. 업로드 후 문자·품목 인식과 카드 대조가 자동으로 진행됩니다.</p>
+    <form className="manager-receipt-form" onSubmit={submit}>
+      <label className="receipt-camera-input"><input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" capture="environment" multiple onChange={event => setFiles(Array.from(event.target.files || []).slice(0, 20))}/><strong>{files.length ? `${files.length}장 선택됨` : '카메라로 촬영 또는 사진 선택'}</strong><span>장당 최대 20MB · 최대 20장</span></label>
+      {files.length > 0 && <div className="manager-receipt-files">{files.map((file, index) => <span key={`${file.name}-${index}`}>{index + 1}. {file.name}</span>)}</div>}
+      <label>부서·섹션<select name="costCenterId" required defaultValue=""><option value="">선택</option>{centers.map(center => <option key={center.id} value={center.id}>{center.name}</option>)}</select></label>
+      <label>결제수단<select name="paymentMethod" required defaultValue="corporate_card"><option value="corporate_card">법인카드</option><option value="personal_card">개인카드</option><option value="cash">현금</option><option value="bank_transfer">계좌이체</option><option value="other">기타</option></select></label>
+      <label>지출 목적 (선택)<input name="reason" maxLength="200" placeholder="예: 주방 식자재 구입"/></label>
+      {message && <p className="manager-receipt-message">{message}</p>}
+      <button className="submit" disabled={busy || !files.length}>{busy ? '분석 중…' : '영수증 업로드'}</button>
+    </form>
+  </Modal>;
+}
+
 function ExpenseWorkspace({ organizationId, accountId, employees, navigationContext, onNavigate, canReview = false }) {
   const initialSection = navigationContext?.cardReview ? 'cards' : 'overview';
   const [section, setSection] = useState(initialSection);
+  const [showReceiptUpload, setShowReceiptUpload] = useState(false);
   const [visited, setVisited] = useState(() => new Set([initialSection]));
   const selectSection = next => { setSection(next); setVisited(current => new Set([...current, next])); };
   useEffect(() => { if (navigationContext?.cardReview) selectSection('cards'); }, [navigationContext?.cardReview, navigationContext?.month]);
@@ -889,7 +917,12 @@ function ExpenseWorkspace({ organizationId, accountId, employees, navigationCont
     requestAnimationFrame(() => document.querySelector(item.target === 'closeouts' ? '.finance-report-dashboard' : next === 'evidence' ? '.expense-review-queue' : '.corporate-card-workspace')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   };
   return <div className="expense-workspace">
-    <div className="page-title expense-workspace-title"><div><p>확인할 일부터 결산까지</p><h1>지출 · 증빙</h1><span>업무별 탭에서 지출 원천과 증빙을 확인하세요.</span></div></div>
+    <div className="page-title expense-workspace-title"><div><p>확인할 일부터 결산까지</p><h1>지출 · 증빙</h1><span>업무별 탭에서 지출 원천과 증빙을 확인하세요.</span></div><button type="button" className="cta" onClick={() => setShowReceiptUpload(true)}>＋ 영수증 업로드</button></div>
+    {showReceiptUpload && <ManagerReceiptUpload
+      organizationId={organizationId}
+      onClose={() => setShowReceiptUpload(false)}
+      onUploaded={() => { setShowReceiptUpload(false); selectSection('evidence'); }}
+    />}
     <div className="expense-workspace-tabs" role="tablist" aria-label="지출·증빙 업무">
       {EXPENSE_SECTIONS.map(([id, label], index) => <button type="button" role="tab" key={id} id={`expense-tab-${id}`} aria-selected={section === id} aria-controls={`expense-panel-${id}`} tabIndex={section === id ? 0 : -1} onClick={() => selectSection(id)} onKeyDown={event => { if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return; event.preventDefault(); const offset = event.key === 'ArrowRight' ? 1 : -1; const next = EXPENSE_SECTIONS[(index + offset + EXPENSE_SECTIONS.length) % EXPENSE_SECTIONS.length][0]; selectSection(next); document.getElementById(`expense-tab-${next}`)?.focus(); }}>{label}</button>)}
     </div>
