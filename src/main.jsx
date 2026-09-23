@@ -855,7 +855,7 @@ function SalesAnalytics({ organizationId, accountId, initialFrom, canSync = fals
     catch (error) { setMessage(error.message || '매출 수집을 요청하지 못했습니다.'); }
     finally { setBusy(false); }
   };
-  return <><div className="page-title sales-page-title"><div><p>POS 완료 주문 기준</p><h1>매출 분석</h1><span>마감된 주와 전주를 같은 요일로 비교합니다.</span></div></div><WeeklyFeedback refreshToken={revision} organizationId={organizationId} accountId={accountId} detailed initialFrom={initialFrom} onSync={canSync ? sync : undefined} syncing={busy} syncMessage={message}/></>;
+  return <><div className="page-title sales-page-title"><div><p>POS 완료 주문 기준</p><h1>매출 분석</h1><span>어제까지 최근 7일을 직전 7일의 같은 요일과 비교합니다.</span></div></div><WeeklyFeedback refreshToken={revision} organizationId={organizationId} accountId={accountId} detailed initialFrom={initialFrom} onSync={canSync ? sync : undefined} syncing={busy} syncMessage={message}/></>;
 }
 
 const EXPENSE_SECTIONS = [
