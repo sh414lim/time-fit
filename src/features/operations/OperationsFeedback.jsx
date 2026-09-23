@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { addDays, attendanceIssues, changePercent, kstDate, lastCompleteWeek, validAttendanceCorrection } from '../../../shared/operations.js';
+import { addDays, attendanceIssues, kstDate, lastCompleteWeek, validAttendanceCorrection } from '../../../shared/operations.js';
 import { correctAttendance, loadOperations } from './operationsApi';
 import { readViewCache, writeViewCache } from '../../lib/viewCache';
+import SalesAnalysisReport from './SalesAnalysisReport';
 
 const number = value => Math.round(value).toLocaleString('ko-KR');
 const money = value => `${number(value)}원`;
@@ -70,54 +71,20 @@ export function WeeklyFeedback({ organizationId, accountId, detailed = false, in
   const today = kstDate(useNow()), latest = lastCompleteWeek(today);
   const [selectedFrom, setSelectedFrom] = useState(initialFrom || latest.from);
   const from = detailed ? selectedFrom : latest.from;
-  const [tab, setTab] = useState('sales');
-  const [metric, setMetric] = useState('revenue');
-  const [selectedDay, setSelectedDay] = useState(null);
-  const [menuQuery, setMenuQuery] = useState('');
-  const [menuSort, setMenuSort] = useState('sales');
   const resource = useOperations(organizationId, 'weekly', { from }, true, refreshToken, accountId);
   const data = resource.data;
-  useEffect(() => { setSelectedDay(null); }, [from]);
-  const delta = (current, previous, unit = '원') => {
-    if (!data?.comparable) return { label: '전주 비교 보류', trend: 'unavailable' };
-    const amount = Number(current || 0) - Number(previous || 0); const change = changePercent(current, previous);
-    const absolute = `${amount > 0 ? '+' : amount < 0 ? '−' : ''}${number(Math.abs(amount))}${unit}`;
-    return { label: change === null ? `전주 기준값 없음 · ${absolute}` : `${amount > 0 ? '▲' : amount < 0 ? '▼' : '—'} ${absolute} · ${Math.abs(change).toFixed(1)}%`, trend: amount > 0 ? 'up' : amount < 0 ? 'down' : 'flat' };
-  };
-  const metrics = data ? [
-    { key: 'revenue', label: data.comparable ? '완료 매출' : '수록된 완료 매출', value: money(data.current.revenue), current: data.current.revenue, previous: data.previous.revenue, unit: '원' },
-    { key: 'orders', label: data.comparable ? '완료 주문' : '수록된 완료 주문', value: `${number(data.current.orders)}건`, current: data.current.orders, previous: data.previous.orders, unit: '건' },
-    { key: 'average', label: '주문당 금액', value: data.current.average === null ? '—' : money(data.current.average), current: data.current.average, previous: data.previous.average, unit: '원' },
-    { key: 'cancelled', label: '취소 주문', value: `${number(data.current.cancelled || 0)}건`, current: data.current.cancelled || 0, previous: data.previous.cancelled || 0, unit: '건' },
-  ] : [];
-  const displayedMetrics = detailed ? metrics : metrics.slice(0, 3);
-  const direction = (current, previous) => current > previous ? '증가' : current < previous ? '감소' : '변동 없음';
-  const insight = data?.comparable ? `완료 매출은 전주보다 ${money(Math.abs(data.current.revenue - data.previous.revenue))} ${direction(data.current.revenue, data.previous.revenue)}했습니다. 주문 수는 ${number(Math.abs(data.current.orders - data.previous.orders))}건 ${direction(data.current.orders, data.previous.orders)}, 주문당 금액은 ${money(Math.abs((data.current.average || 0) - (data.previous.average || 0)))} ${direction(data.current.average || 0, data.previous.average || 0)}했습니다.` : '수집 범위를 확인한 뒤 전주 비교와 변화 해석을 제공합니다.';
-  const valueFor = day => metric === 'orders' ? day.orders : metric === 'average' ? day.average || 0 : day.revenue;
-  const valueLabel = value => metric === 'orders' ? `${number(value)}건` : money(value);
-  const visibleMenus = data ? [...data.menus].filter(menu => `${menu.name} ${menu.category || ''}`.toLowerCase().includes(menuQuery.trim().toLowerCase())).sort((a, b) => menuSort === 'quantity' ? b.quantity - a.quantity : menuSort === 'change' ? (b.quantity - (b.previous || 0)) - (a.quantity - (a.previous || 0)) : b.sales - a.sales).slice(0, detailed ? 10 : 5) : [];
   const statusLabel = !data ? '확인 중' : data.status?.state === 'finalized' ? '마감 완료' : data.status?.state === 'revised' ? '재집계됨' : data.syncError ? '수집 오류' : '수집 확인 필요';
-  return <section className="card ops-card ops-weekly">
-    <div className="ops-heading sales-analysis-heading"><div><p className="ops-eyebrow">전주 동일 요일 대비</p><h2>{detailed ? '주간 매출 분석' : '지난주 매장 요약'}</h2><p>{from} ~ {addDays(from, 6)} · 비교 {addDays(from, -7)} ~ {addDays(from, -1)}</p></div><span className={`sales-status ${data?.status?.state || 'loading'}`}>{statusLabel}</span>{!detailed && <button className="outline" onClick={() => onNavigate('sales', { from })}>자세히 보기 →</button>}</div>
-    {detailed && <div className="ops-controls sales-period-controls"><button className="outline" onClick={() => setSelectedFrom(addDays(from, -7))}>← 이전 주</button><button className="outline" disabled={from >= latest.from} onClick={() => setSelectedFrom(addDays(from, 7))}>다음 주 →</button><button className="outline" disabled={from === latest.from} onClick={() => setSelectedFrom(latest.from)}>최근 마감 주</button>{onSync && <button className="submit" disabled={syncing || resource.loading} onClick={() => onSync({ from: addDays(from, -7), to: addDays(from, 6) })}>{syncing ? '동기화 중…' : '최신 매출 동기화'}</button>}<button className="outline" disabled={resource.loading || syncing} onClick={resource.refresh}>화면 다시 조회</button></div>}
+  return <section className={`card ops-card ops-weekly ${detailed ? 'sales-report' : 'sales-home-summary'}`}>
+    <div className="ops-heading sales-analysis-heading">
+      <div><p className="ops-eyebrow">{detailed ? 'POS 완료 주문 · 전주 동일 요일 비교' : '지난 마감 주 요약'}</p><h2>{detailed ? '주간 매출 성과' : '매출 흐름'}</h2><p>{from} ~ {addDays(from, 6)} <span>비교 {addDays(from, -7)} ~ {addDays(from, -1)}</span></p></div>
+      <span className={`sales-status ${data?.status?.state || 'loading'}`}>{statusLabel}</span>
+    </div>
+    {detailed && <div className="sales-period-toolbar"><div><button className="outline" onClick={() => setSelectedFrom(addDays(from, -7))}>← 이전 주</button><button className="outline" disabled={from >= latest.from} onClick={() => setSelectedFrom(addDays(from, 7))}>다음 주 →</button><button className="outline" disabled={from === latest.from} onClick={() => setSelectedFrom(latest.from)}>최근 마감 주</button></div><div>{onSync && <button className="submit" disabled={syncing || resource.loading} onClick={() => onSync({ from: addDays(from, -7), to: addDays(from, 6) })}>{syncing ? '매출 동기화 중…' : '최신 매출 동기화'}</button>}<button className="outline" disabled={resource.loading || syncing} onClick={resource.refresh}>다시 조회</button></div></div>}
     {syncMessage && <p className="ops-warning" role="status">{syncMessage}</p>}
     <LoadState resource={resource} label="주간 매출"/>
-    {data && (!data.connected ? <p className="ops-status">연결된 매출 데이터가 없습니다. 운영 설정에서 POS 연결을 확인해 주세요.</p> : <>
-      {detailed && <details className={`sales-data-status ${data.comparable ? 'complete' : 'incomplete'}`} open={!data.comparable || Boolean(data.syncError)}><summary><b>{statusLabel}</b><span>POS 수집 완료 {time(data.status?.lastSyncedAt || data.syncedAt)} · 원주문/집계 {data.status?.cacheMatched ? '일치' : '확인 필요'}</span></summary><p>수집 범위 {data.status?.coveredFrom ? time(data.status.coveredFrom) : '확인 없음'} ~ {data.status?.coveredTo ? time(data.status.coveredTo) : '확인 없음'} · 페이지 {data.status?.pageComplete ? '완주' : '확인 필요'}{data.status?.revisionCount ? ` · 정정 ${data.status.revisionCount}회` : ''}</p></details>}
-      {!data.comparable && <p className="ops-warning">선택 주 또는 비교 주의 수집 범위·페이지 완주·원주문 대조가 확인되지 않아 전주 비교를 보류했습니다. 아래 값은 현재 저장된 주문 합계입니다.</p>}
-      <div className="ops-metrics sales-metrics">{displayedMetrics.map(item => { const change = item.current === null ? { label: '완료 주문 없음', trend: 'unavailable' } : delta(item.current, item.previous, item.unit); return <article key={item.key}><span>{item.label}</span><strong>{item.value}</strong><small className={change.trend}>{change.label}</small><em>전주 {item.previous === null ? '—' : item.unit === '건' ? `${number(item.previous)}건` : money(item.previous)}</em></article>; })}</div>
-      <p className="ops-insight">{insight}</p>
-      {detailed && <div className="ops-tabs" aria-label="매출 상세 보기"><button aria-pressed={tab === 'sales'} onClick={() => setTab('sales')}>일별 매출</button><button aria-pressed={tab === 'menus'} onClick={() => setTab('menus')}>메뉴 판매</button></div>}
-      {detailed && tab === 'sales' && <div className="ops-days"><div className="sales-chart-tools"><p className="ops-note">진한색 선택 주 · 옅은색 비교 주{!data.comparable ? ' (비교 보류)' : ''}</p><div className="ops-tabs" aria-label="차트 지표">{[['revenue','매출'],['orders','주문 수'],['average','주문당 금액']].map(([key,label]) => <button key={key} aria-pressed={metric === key} onClick={() => setMetric(key)}>{label}</button>)}</div></div>{data.current.days.map((day, index) => {
-        const previous = data.previous.days[index]; const max = Math.max(1, ...data.current.days.map(valueFor), ...(data.comparable ? data.previous.days.map(valueFor) : []));
-        return <button type="button" className="ops-day" key={day.date} aria-label={`${day.date} ${valueLabel(valueFor(day))}, 비교 주 ${valueLabel(valueFor(previous))}`} onClick={() => setSelectedDay(selectedDay?.date === day.date ? null : { ...day, previous })}><b>{['월','화','수','목','금','토','일'][index]}<small>{day.date.slice(5)}</small></b><div><div className={`ops-bar ${day.covered ? '' : 'unverified'}`}><i style={{ width: `${valueFor(day) / max * 100}%` }}/><span>{day.covered ? valueLabel(valueFor(day)) : `수집 미확정 · ${valueLabel(valueFor(day))}`}</span></div>{data.comparable && <div className="ops-bar previous"><i style={{ width: `${valueFor(previous) / max * 100}%` }}/><span>{valueLabel(valueFor(previous))}</span></div>}</div></button>;
-      })}{selectedDay && <div className="sales-day-detail" role="region" aria-label={`${selectedDay.date} 매출 상세`}><div><b>{selectedDay.date} 상세</b><button className="outline" onClick={() => setSelectedDay(null)}>닫기</button></div><dl><div><dt>완료 매출</dt><dd>{money(selectedDay.revenue)}</dd></div><div><dt>완료 주문</dt><dd>{number(selectedDay.orders)}건</dd></div><div><dt>주문당 금액</dt><dd>{selectedDay.average === null ? '—' : money(selectedDay.average)}</dd></div><div><dt>취소 주문</dt><dd>{number(selectedDay.cancelled || 0)}건</dd></div></dl><p>전주 같은 요일 {money(selectedDay.previous.revenue)} · {number(selectedDay.previous.orders)}건</p></div>}</div>}
-      {(!detailed || tab === 'menus') && <div className="ops-menus"><h3>메뉴 판매 분석</h3><p className="ops-note">유료 메뉴 기준 · POS 메뉴 코드 우선 집계 · 무료 옵션 제외</p>{detailed && <div className="sales-menu-tools"><label>메뉴 검색<input value={menuQuery} onChange={event => setMenuQuery(event.target.value)} placeholder="메뉴명 또는 카테고리"/></label><label>정렬<select value={menuSort} onChange={event => setMenuSort(event.target.value)}><option value="sales">판매액순</option><option value="quantity">수량순</option><option value="change">증가순</option></select></label></div>}{!data.menuComparable && <p className="ops-note">메뉴 비교에 필요한 주문 상세가 부족하면 증감을 표시하지 않습니다.</p>}{visibleMenus.length ? <div className="sales-menu-table"><div className="sales-menu-head"><span>순위·메뉴</span><span>판매 수량</span><span>주문 수</span><span>표시 판매액·비중</span><span>전주 증감</span></div>{visibleMenus.map((menu, index) => <div className="ops-menu" key={menu.key || menu.name}><span>{index + 1}</span><b>{menu.name}<small>{menu.category || '미분류'}{!menu.code ? ' · 이름 기준 집계' : ''}</small></b><strong>{number(menu.quantity)}개</strong><em>{number(menu.orders || 0)}건</em><em>{money(menu.sales || 0)} · {(menu.share || 0).toFixed(1)}%</em><small>{menu.previous === null ? '비교 보류' : `전주 ${number(menu.previous)}개 · ${menu.quantity - menu.previous > 0 ? '+' : ''}${number(menu.quantity - menu.previous)}개`}</small></div>)}</div> : <p className="ops-status">표시할 유료 메뉴 내역이 없습니다.</p>}</div>}
-      <p className="ops-note">실시간 매출이나 순이익이 아닙니다. 취소 주문은 제외하며, POS 수집 지연·누락은 원본과 확인이 필요합니다.</p>
-    </>)}
+    {data && (!data.connected ? <p className="ops-status">연결된 매출 데이터가 없습니다. 운영 설정에서 POS 연결을 확인해 주세요.</p> : <SalesAnalysisReport data={data} detailed={detailed} statusLabel={statusLabel} time={time} onOpenDetail={() => onNavigate('sales', { from })}/>)}
   </section>;
 }
-
 export function AttendanceIssueList({ employees, leaves, organizationId, context, canCorrect, onRefresh, onBack, onOpenSchedule }) {
   const now = useNow();
   const [type, setType] = useState(context.issueType);
