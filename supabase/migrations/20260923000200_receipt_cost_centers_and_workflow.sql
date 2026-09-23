@@ -75,6 +75,8 @@ alter table public.timefit_user_finance_documents
   add column if not exists submitter_confirmed_at timestamptz,
   add column if not exists change_requested_at timestamptz,
   add column if not exists change_request_reason text,
+  add column if not exists reviewed_by uuid references auth.users(id) on delete set null,
+  add column if not exists reviewed_at timestamptz,
   add column if not exists duplicate_of_document_id uuid references public.timefit_user_finance_documents(id) on delete set null,
   add column if not exists page_count integer not null default 1,
   add column if not exists capture_metadata jsonb not null default '{}'::jsonb;
