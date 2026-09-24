@@ -3,11 +3,15 @@ import { createHash } from 'node:crypto';
 import { authorizeFinance, authorizeOrganizationMember, canAccessFinanceCostCenter, financeError, financeRest, financeServerConfigured, methodNotAllowed, serviceHeaders } from './_finance-server.js';
 import { extractReceiptWithLlm, mergeReceiptExtractions } from './_receipt-llm.js';
 import { receiptValidation } from '../domain/receipt-validation.js';
+import { extractSpatialReceipt, normalizeOcrNumber } from '../domain/receipt-spatial-extraction.js';
 
 const extractAmount = text => {
-  const labelled = [...text.matchAll(/(?:합계|결제금액|받을금액|총액)\s*[:：]?\s*[₩￦]?\s*([0-9][0-9,]*)/gi)].map(match => Number(match[1].replace(/,/g, ''))).filter(Number.isFinite);
+  const dailySales = [...text.matchAll(/금일[ \t]*매출액[ \t]*[:：]?[ \t]*[₩￦]?[ \t]*([0-9][0-9,. \t]*)/gi)].map(match => normalizeOcrNumber(match[1])).filter(value => Number.isFinite(value) && value > 0);
+  if (dailySales.length) return dailySales.at(-1);
+  const excluded = String(text).replace(/(?:전\s*미수금|총\s*미수금|총\s*합계)[^\n]*/gi, '');
+  const labelled = [...excluded.matchAll(/(?:\[?[ \t]*합[ \t]*계[ \t]*\]?|결제금액|받을금액|총액)[ \t]*[:：]?[ \t]*[₩￦]?[ \t]*([0-9][0-9,. \t]*)/gi)].map(match => normalizeOcrNumber(match[1])).filter(value => Number.isFinite(value) && value > 0);
   if (labelled.length) return labelled.at(-1);
-  const amounts = [...text.matchAll(/[₩￦]\s*([0-9][0-9,]*)/g)].map(match => Number(match[1].replace(/,/g, ''))).filter(amount => amount > 0);
+  const amounts = [...excluded.matchAll(/[₩￦]\s*([0-9][0-9,.\s]*)/g)].map(match => normalizeOcrNumber(match[1])).filter(amount => amount > 0);
   return amounts.length ? Math.max(...amounts) : null;
 };
 
@@ -17,16 +21,19 @@ const extractDate = text => {
   return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
 };
 
-export const structuredReceipt = text => {
+export const structuredReceipt = (text, annotation = null) => {
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const businessNumber = text.match(/(?:사업자(?:등록)?번호|사업자)\s*[:：]?\s*(\d{3})[- ]?(\d{2})[- ]?(\d{5})/i);
   const approvalNumber = text.match(/(?:승인번호|승인 No\.?)\s*[:：]?\s*([0-9A-Za-z-]{4,})/i);
   const last4 = text.match(/(?:카드번호|카드)\s*[:：]?\s*(?:[*Xx#-]+\s*)?(\d{4})(?!\d)/i);
+  const spatial = annotation ? extractSpatialReceipt(annotation, text) : {};
   return {
-    merchantName: lines.find(line => !/영수증|매출전표|사업자|대표|전화|주소/i.test(line) && /[가-힣A-Za-z]/.test(line)) || null,
-    transactionDate: extractDate(text), totalAmount: extractAmount(text),
-    merchantBusinessNumber: businessNumber ? `${businessNumber[1]}-${businessNumber[2]}-${businessNumber[3]}` : null,
+    merchantName: spatial.merchantName || lines.find(line => !/영수증|매출전표|거래\s*명세서|사업자|대표|전화|주소/i.test(line) && /[가-힣A-Za-z]/.test(line)) || null,
+    transactionDate: extractDate(text), totalAmount: spatial.totalAmount || extractAmount(text),
+    merchantBusinessNumber: spatial.merchantBusinessNumber || (businessNumber ? `${businessNumber[1]}-${businessNumber[2]}-${businessNumber[3]}` : null),
     approvalNumber: approvalNumber?.[1] || null, cardLast4: last4?.[1] || null,
+    recipientName: spatial.recipientName || null, recipientBusinessNumber: spatial.recipientBusinessNumber || null,
+    lineItems: spatial.lineItems || [], spatialExtraction: Boolean(spatial.spatialExtraction),
   };
 };
 
@@ -81,7 +88,8 @@ async function visionText(content) {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok || body.responses?.[0]?.error) throw new Error(body.responses?.[0]?.error?.message || `google_vision_${response.status}`);
-  return body.responses?.[0]?.fullTextAnnotation?.text || body.responses?.[0]?.textAnnotations?.[0]?.description || '';
+  const annotation = body.responses?.[0]?.fullTextAnnotation || null;
+  return { text: annotation?.text || body.responses?.[0]?.textAnnotations?.[0]?.description || '', annotation };
 }
 
 const scheduleBackground = task => {
@@ -163,14 +171,25 @@ export async function processReceiptRun({ organizationId, documentId, runId }) {
     const pages = await financeRest(`timefit_user_finance_document_pages?document_id=eq.${encodeURIComponent(documentId)}&select=*&order=page_number.asc`);
     const sourcePages = pages.length ? pages : [{ storage_path: document.storage_path, mime_type: document.mime_type }];
     if (sourcePages.some(page => !String(page.mime_type || '').startsWith('image/'))) throw new Error('receipt_image_required');
-    const pageTexts = [];
+    const pageResults = [];
     for (const page of sourcePages) {
-      pageTexts.push(await visionText(await downloadDocument(page.storage_path)));
+      pageResults.push(await visionText(await downloadDocument(page.storage_path)));
       await financeRest(`timefit_user_expense_processing_runs?id=eq.${encodeURIComponent(runId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ heartbeat_at: new Date().toISOString() }) });
     }
-    const text = pageTexts.filter(Boolean).join('\n\n--- page ---\n\n');
+    const text = pageResults.map(result => result.text).filter(Boolean).join('\n\n--- page ---\n\n');
     if (!text.trim()) throw new Error('receipt_text_not_found');
-    const ruleBased = structuredReceipt(text);
+    const spatialPages = pageResults.map(result => structuredReceipt(result.text, result.annotation));
+    const combined = structuredReceipt(text);
+    const primary = spatialPages[0] || {};
+    const ruleBased = {
+      ...combined,
+      ...primary,
+      merchantName: primary.merchantName || combined.merchantName,
+      merchantBusinessNumber: primary.merchantBusinessNumber || combined.merchantBusinessNumber,
+      transactionDate: primary.transactionDate || combined.transactionDate,
+      totalAmount: primary.totalAmount || combined.totalAmount,
+      lineItems: spatialPages.flatMap(page => page.lineItems || []).map((item, index) => ({ ...item, lineNumber: index + 1 })),
+    };
     let llmResult = null; let llmError = null;
     try { llmResult = await extractReceiptWithLlm(text); } catch (error) { llmError = error; }
     let extracted = mergeReceiptExtractions(ruleBased, llmResult);

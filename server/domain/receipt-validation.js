@@ -16,6 +16,10 @@ export function receiptValidation(extracted = {}) {
   }
   const lineItemDifference = totalAmount === null ? null : totalAmount - lineItemTotal;
   if (lineItemTotal > 0 && lineItemDifference !== 0) issues.push({ code: 'line_item_total_mismatch', field: 'lineItems', severity: 'review', difference: lineItemDifference });
+  for (const [index, item] of (extracted.lineItems || []).entries()) {
+    const quantity = Number(item.quantity); const unitPrice = amount(item.unitPrice); const lineAmount = amount(item.lineAmount);
+    if (Number.isFinite(quantity) && unitPrice !== null && lineAmount !== null && Math.abs(quantity * unitPrice - lineAmount) >= 1) issues.push({ code: 'line_item_arithmetic_mismatch', field: 'lineItems', severity: 'review', lineNumber: item.lineNumber || index + 1, expected: Math.round(quantity * unitPrice), actual: lineAmount });
+  }
   for (const [field, confidence] of Object.entries(extracted.fieldConfidence || {})) {
     if (Number(confidence) < 0.7) issues.push({ code: 'low_confidence', field, severity: 'review', confidence: Number(confidence) || 0 });
   }
