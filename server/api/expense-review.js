@@ -1,4 +1,5 @@
 import { authorizeFinance, canAccessFinanceCostCenter, financeError, financeRest, financeServerConfigured, methodNotAllowed, serviceHeaders } from './_finance-server.js';
+import { recoverStaleReceiptRuns } from './receipt-process.js';
 
 async function userRpc(token, name, body) {
   const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/rpc/${name}`, {
@@ -28,11 +29,13 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === 'GET') {
+      await recoverStaleReceiptRuns(organizationId);
       const requestedStatus = req.query?.status;
       const allowedReviews = ['submitted','submitter_review','manager_review','change_requested','approved','rejected','withdrawn'];
       const statusFilter = requestedStatus === 'attention' || !requestedStatus
-        ? 'or=(processing_status.eq.failed,review_status.in.(manager_review,change_requested))'
+        ? 'or=(processing_status.in.(uploaded,queued,processing,failed),review_status.in.(submitted,submitter_review,manager_review,change_requested))'
         : requestedStatus === 'failed' ? 'processing_status=eq.failed'
+          : requestedStatus === 'processing' ? 'processing_status=in.(uploaded,queued,processing)'
           : `review_status=eq.${encodeURIComponent(allowedReviews.includes(requestedStatus) ? requestedStatus : 'manager_review')}`;
       const costCenterFilter = req.query?.costCenterId ? `&cost_center_id=eq.${encodeURIComponent(req.query.costCenterId)}` : '';
       const allDocuments = await financeRest(`timefit_user_finance_documents?organization_id=eq.${encodeURIComponent(organizationId)}&document_type=eq.receipt&${statusFilter}${costCenterFilter}&select=id,title,file_name,storage_path,mime_type,document_date,processing_status,review_status,cost_center_id,payment_method,change_request_reason,extracted_data,processing_error,processed_at,created_at&order=created_at.desc&limit=100`);

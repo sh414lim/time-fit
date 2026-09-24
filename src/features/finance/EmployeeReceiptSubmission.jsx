@@ -9,7 +9,7 @@ import {
   markExpenseReceiptReminderRead,
   processReceiptDocument,
 } from '../../lib/supabase';
-import { inspectReceiptImage } from './receiptQuality';
+import { inspectReceiptImage, prepareReceiptFiles } from './receiptQuality';
 
 const processing = new Set(['uploaded','queued','processing']);
 const money = value => `${Number(value || 0).toLocaleString('ko-KR')}원`;
@@ -65,9 +65,11 @@ export default function EmployeeReceiptSubmission({ organizationId, employee }) 
   }, [documents.map(item => `${item.id}:${item.processing_status}:${item.review_status}`).join('|')]);
   const defaultCenterId = centers.find(center => center.staff_category_id === employee?.categoryId)?.id || centers[0]?.id || '';
   const selectFiles = async event => {
-    const next = Array.from(event.target.files || []).slice(0,20); if (!next.length) return;
-    const issues = (await Promise.all(next.map(inspectReceiptImage))).flat();
-    setFiles(next); setMessage(issues.length ? issues[0].message : '사진을 확인한 뒤 부서와 결제수단을 선택해 주세요.');
+    const selected = Array.from(event.target.files || []).slice(0,20); if (!selected.length) return;
+    setBusy(true); setMessage('OCR에 맞게 사진을 준비하고 있어요.');
+    try { const next = await prepareReceiptFiles(selected); const issues = (await Promise.all(next.map(inspectReceiptImage))).flat(); setFiles(next); setMessage(issues.length ? issues[0].message : '사진을 확인한 뒤 부서와 결제수단을 선택해 주세요.'); }
+    catch (error) { setFiles([]); event.target.value = ''; setMessage(error.message || '영수증 사진을 준비하지 못했습니다.'); }
+    finally { setBusy(false); }
   };
   const submit = async event => {
     event.preventDefault(); if (!files.length) return setMessage('촬영한 영수증 또는 사진을 선택해 주세요.');
@@ -75,7 +77,7 @@ export default function EmployeeReceiptSubmission({ organizationId, employee }) 
     try {
       const document = await createReceiptSubmission({ organizationId, files, costCenterId: form.get('costCenterId'), paymentMethod: form.get('paymentMethod'), staffId: employee.id, submissionReason: String(form.get('reason') || '').trim() });
       await processReceiptDocument({ organizationId, documentId: document.id });
-      setFiles([]); event.currentTarget.reset(); setMessage('제출 접수 완료 · 문자와 품목을 확인하는 동안 다른 업무를 계속할 수 있어요.'); await refresh();
+      setFiles([]); event.currentTarget.reset(); setMessage('제출 접수 완료 · 문자와 기본 결제정보를 확인하는 동안 다른 업무를 계속할 수 있어요.'); await refresh();
     } catch (error) { setMessage(error.message || '영수증을 제출하지 못했습니다. 원본 저장 여부를 관리자에게 확인해 주세요.'); }
     finally { setBusy(false); }
   };
@@ -88,12 +90,12 @@ export default function EmployeeReceiptSubmission({ organizationId, employee }) 
   const read = async reminder => { if (reminder.status === 'read') return; try { await markExpenseReceiptReminderRead(reminder.id); setReminders(items => items.map(item => item.id === reminder.id ? { ...item, status: 'read' } : item)); } catch (error) { setMessage(error.message || '알림을 확인 처리하지 못했습니다.'); } };
   if (!employee) return <section className="card full-card empty-schedule"><b>직원 연결이 필요해요.</b><span>관리자에게 현재 로그인 계정과 직원 정보를 연결해 달라고 요청해 주세요.</span></section>;
   return <>
-    <div className="page-title"><div><p>촬영하고 필요한 값만 확인</p><h1>내 영수증</h1><span>원본 저장 후 문자·품목 인식과 카드 대조는 백그라운드에서 진행됩니다.</span></div></div>
+    <div className="page-title"><div><p>촬영하고 필요한 값만 확인</p><h1>내 영수증</h1><span>원본 저장 후 문자와 기본 결제정보 인식, 카드 대조는 백그라운드에서 진행됩니다.</span></div></div>
     {reminders.some(item => item.status === 'sent') && <section className="receipt-reminder-panel"><div><b>제출하지 않은 영수증이 있어요</b><span>카드 사용 내역을 확인하고 해당 영수증을 촬영해 주세요.</span></div>{reminders.filter(item => item.status === 'sent').map(item => <button key={item.id} onClick={() => read(item)}><span>{item.message}</span><em>{item.reminder_number}차 알림 · 확인</em></button>)}</section>}
     {detail && <ReceiptCorrection detail={detail} centers={centers} busy={busy} onClose={() => setDetail(null)} onConfirm={confirm}/>}
     <section className="card full-card employee-receipt-card"><div className="card-title"><div><h2>영수증 촬영·업로드</h2><p>네 모서리와 결제금액이 보이게 촬영해 주세요. 긴 영수증은 페이지를 추가할 수 있습니다.</p></div></div>
       <form onSubmit={submit}>
-        <label className="receipt-camera-input"><input name="receipt" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" capture="environment" multiple onChange={selectFiles}/><strong>{files.length ? `${files.length}장 선택됨` : '카메라로 촬영 또는 사진 선택'}</strong><span>장당 최대 20MB · 최대 20장</span></label>
+        <label className="receipt-camera-input"><input name="receipt" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" capture="environment" multiple onChange={selectFiles}/><strong>{files.length ? `${files.length}장 선택됨` : '카메라로 촬영 또는 사진 선택'}</strong><span>최대 20장 · HEIC와 큰 사진은 OCR용 JPG로 자동 최적화</span></label>
         {previews.length > 0 && <div className="receipt-preview-strip">{previews.map((item,index) => <figure key={`${item.file.name}-${index}`}><img src={item.url} alt={`영수증 ${index + 1}페이지 미리보기`}/><figcaption>{index + 1}페이지</figcaption></figure>)}<button type="button" className="outline" onClick={() => setFiles([])}>다시 선택</button></div>}
         <div className="receipt-submit-fields"><label>부서·섹션<select name="costCenterId" required defaultValue={defaultCenterId} key={defaultCenterId}><option value="">선택</option>{centers.map(center => <option key={center.id} value={center.id}>{centerLabel(center, centers)}</option>)}</select></label><label>결제수단<select name="paymentMethod" required defaultValue="corporate_card"><option value="corporate_card">법인카드</option><option value="personal_card">개인카드</option><option value="cash">현금</option><option value="bank_transfer">계좌이체</option><option value="other">기타</option></select></label><label>지출 목적 <input name="reason" maxLength="200" placeholder="선택 · 예: 주방 식자재 구입"/></label></div>
         <button className="cta receipt-submit-button" disabled={busy || !files.length}>{busy ? '원본 저장 중…' : '영수증 제출'}</button>

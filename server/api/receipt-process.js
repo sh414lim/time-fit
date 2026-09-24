@@ -75,8 +75,8 @@ async function downloadDocument(path) {
 
 async function visionText(content) {
   if (!process.env.GOOGLE_VISION_API_KEY) throw new Error('google_vision_not_configured');
-  const response = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${encodeURIComponent(process.env.GOOGLE_VISION_API_KEY)}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+  const response = await fetch('https://vision.googleapis.com/v1/images:annotate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GOOGLE_VISION_API_KEY },
     body: JSON.stringify({ requests: [{ image: { content }, features: [{ type: 'DOCUMENT_TEXT_DETECTION' }] }] }),
   });
   const body = await response.json().catch(() => ({}));
@@ -164,7 +164,10 @@ export async function processReceiptRun({ organizationId, documentId, runId }) {
     const sourcePages = pages.length ? pages : [{ storage_path: document.storage_path, mime_type: document.mime_type }];
     if (sourcePages.some(page => !String(page.mime_type || '').startsWith('image/'))) throw new Error('receipt_image_required');
     const pageTexts = [];
-    for (const page of sourcePages) pageTexts.push(await visionText(await downloadDocument(page.storage_path)));
+    for (const page of sourcePages) {
+      pageTexts.push(await visionText(await downloadDocument(page.storage_path)));
+      await financeRest(`timefit_user_expense_processing_runs?id=eq.${encodeURIComponent(runId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ heartbeat_at: new Date().toISOString() }) });
+    }
     const text = pageTexts.filter(Boolean).join('\n\n--- page ---\n\n');
     if (!text.trim()) throw new Error('receipt_text_not_found');
     const ruleBased = structuredReceipt(text);
@@ -212,9 +215,37 @@ async function authorizeReceipt(req, organizationId, document) {
   return manager;
 }
 
+export const isReceiptRunStale = (run, now = Date.now(), staleAfterMs = 10 * 60 * 1000) => {
+  const activity = new Date(run?.heartbeat_at || run?.claimed_at || run?.started_at || run?.created_at || 0).getTime();
+  return Number.isFinite(activity) && now - activity >= staleAfterMs;
+};
+
+export async function recoverStaleReceiptRuns(organizationId) {
+  const active = await financeRest(`timefit_user_expense_processing_runs?organization_id=eq.${encodeURIComponent(organizationId)}&status=in.(queued,processing)&select=id,document_id,status,attempt_count,created_at,started_at,claimed_at,heartbeat_at&order=created_at.asc&limit=100`);
+  const stale = active.filter(run => isReceiptRunStale(run));
+  for (const run of stale) {
+    if (Number(run.attempt_count || 0) >= 5) {
+      await finishRun(run.id, { status: 'failed', error_code: 'receipt_retry_limit' });
+      await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(run.document_id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ processing_status: 'failed', review_status: 'submitter_review', processing_error: '자동 분석 재시도 횟수를 초과했습니다.', processed_at: new Date().toISOString() }) });
+      continue;
+    }
+    await financeRest(`timefit_user_expense_processing_runs?id=eq.${encodeURIComponent(run.id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'queued', error_code: 'stale_run_recovered', finished_at: null }) });
+    await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(run.document_id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ processing_status: 'queued', processing_error: null }) });
+    scheduleBackground(() => processReceiptRun({ organizationId, documentId: run.document_id, runId: run.id }));
+  }
+  return { scanned: active.length, recovered: stale.filter(run => Number(run.attempt_count || 0) < 5).length, failed: stale.filter(run => Number(run.attempt_count || 0) >= 5).length };
+}
+
 async function enqueueRun({ organizationId, documentId, userId }) {
-  const active = await financeRest(`timefit_user_expense_processing_runs?document_id=eq.${encodeURIComponent(documentId)}&status=in.(queued,processing)&select=id,status&limit=1`);
-  if (active.length) return { run: active[0], duplicateRequest: true };
+  const active = await financeRest(`timefit_user_expense_processing_runs?document_id=eq.${encodeURIComponent(documentId)}&status=in.(queued,processing)&select=id,status,attempt_count,created_at,started_at,claimed_at,heartbeat_at&limit=1`);
+  if (active.length) {
+    if (isReceiptRunStale(active[0]) && Number(active[0].attempt_count || 0) < 5) {
+      await financeRest(`timefit_user_expense_processing_runs?id=eq.${encodeURIComponent(active[0].id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'queued', error_code: 'stale_run_recovered', finished_at: null }) });
+      scheduleBackground(() => processReceiptRun({ organizationId, documentId, runId: active[0].id }));
+      return { run: { ...active[0], status: 'queued' }, duplicateRequest: false, recovered: true };
+    }
+    return { run: active[0], duplicateRequest: true };
+  }
   const recent = await financeRest(`timefit_user_expense_processing_runs?document_id=eq.${encodeURIComponent(documentId)}&select=id&order=created_at.desc&limit=5`);
   if (recent.length >= 5) throw new Error('receipt_retry_limit');
   const rows = await financeRest('timefit_user_expense_processing_runs', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify([{ organization_id: organizationId, document_id: documentId, status: 'queued', ocr_provider: 'google_vision', ocr_model: 'DOCUMENT_TEXT_DETECTION', extractor_version: 'receipt-v2', created_by: userId }]) });
@@ -251,7 +282,8 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'PATCH') {
-      if (!auth.ownDocument) return res.status(403).json({ ok: false, error: '제출자만 인식 결과를 확인할 수 있습니다.' });
+      const canCorrect = auth.ownDocument || auth.isOwner || auth.permissions?.some(permission => ['expense.receipt.review','expense.manage'].includes(permission));
+      if (!canCorrect) return res.status(403).json({ ok: false, error: '제출자 또는 영수증 검토 권한이 있는 관리자만 인식 결과를 수정할 수 있습니다.' });
       const current = document.extracted_data || {}; const input = req.body?.patch || {};
       const totalAmount = Number(input.totalAmount ?? current.totalAmount);
       const transactionDate = String(input.transactionDate ?? current.transactionDate ?? '');

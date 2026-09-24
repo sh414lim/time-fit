@@ -459,8 +459,8 @@ export async function createReceiptSubmission({ organizationId, files, costCente
   const selected = Array.from(files || []).filter(Boolean);
   if (!selected.length) throw new Error('촬영한 영수증을 선택해 주세요.');
   if (selected.length > 20) throw new Error('영수증은 한 번에 20장까지 올릴 수 있어요.');
-  if (selected.some(file => !String(file.type || '').startsWith('image/'))) throw new Error('JPG, PNG, WebP 또는 HEIC 이미지만 올릴 수 있어요.');
-  if (selected.some(file => file.size > 20 * 1024 * 1024) || selected.reduce((sum, file) => sum + file.size, 0) > 60 * 1024 * 1024) throw new Error('이미지 한 장은 20MB, 전체는 60MB 이하만 올릴 수 있어요.');
+  if (selected.some(file => !['image/jpeg','image/png','image/webp'].includes(String(file.type || '').toLowerCase()))) throw new Error('OCR 처리 전 JPG, PNG 또는 WebP 이미지가 필요합니다.');
+  if (selected.some(file => file.size > 7 * 1024 * 1024) || selected.reduce((sum, file) => sum + file.size, 0) > 60 * 1024 * 1024) throw new Error('OCR용 이미지 한 장은 7MB, 전체는 60MB 이하만 올릴 수 있어요.');
   if (!costCenterId) throw new Error('영수증을 사용할 부서·섹션을 선택해 주세요.');
   const hashes = await Promise.all(selected.map(sha256File));
   let contentSha256 = hashes.length === 1 ? hashes[0] : null;
