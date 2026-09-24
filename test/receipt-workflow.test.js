@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { canTransitionReceiptReview, receiptPriority, receiptValidation } from '../server/domain/receipt-validation.js';
-import { matchScore } from '../server/api/receipt-process.js';
+import { isReceiptRunStale, matchScore } from '../server/api/receipt-process.js';
 
 test('영수증 필수값과 품목 합계를 제출자 확인 대상으로 분류한다', () => {
   const missing = receiptValidation({ transactionDate: '2026-09-23', totalAmount: 12000 });
@@ -40,4 +40,10 @@ test('매칭 문맥 점수는 총 100점을 넘지 않는다', () => {
     { merchant_name: '테스트상회 강남점', approved_at: '2026-09-23T12:01:00+09:00', net_amount: 12000, approval_number: 'A1', card: { last4: '1234' } },
   );
   assert.equal(result.score, 100);
+});
+
+test('10분 이상 heartbeat가 없는 OCR 작업만 복구 대상으로 판정한다', () => {
+  const now = Date.parse('2026-09-24T12:00:00Z');
+  assert.equal(isReceiptRunStale({ heartbeat_at: '2026-09-24T11:49:59Z' }, now), true);
+  assert.equal(isReceiptRunStale({ heartbeat_at: '2026-09-24T11:55:00Z' }, now), false);
 });

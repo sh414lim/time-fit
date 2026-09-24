@@ -18,6 +18,7 @@ import EmployeeReceiptSubmission from './features/finance/EmployeeReceiptSubmiss
 import ExpenseReminderSettings from './features/finance/ExpenseReminderSettings';
 import ExpenseLedger from './features/finance/ExpenseLedger';
 import ManualExpenseForm from './features/finance/ManualExpenseForm';
+import { inspectReceiptImage, prepareReceiptFiles } from './features/finance/receiptQuality';
 import { processReceiptDocument } from './lib/supabase';
 import { acceptEmployeeInvitation, activateTabletDevice, archiveCostCenter, bootstrapTossPlaceConnection, createCorporateCard, createFeedbackItem, createLeaveRequest, createManagementAccount, createManualStaff, createMeetingNote, createReceiptSubmission, deleteFinanceDocument, deleteStaffCategory, deleteWorkSchedule, disconnectCorporateCard, ensureManagerOrganization, getAuthContext, getCachedOrganizationSalesDashboard, getManagerTabletOrganization, getOrganizationSettings, getTabletDeviceContext, getTossPlaceConnection, grantStaffLeave, importCardTransactions, importFeedbackItems, inviteEmployeeByCode, isAuthSessionError, loadCardTransactions, loadCorporateCards, loadCostCenters, loadFeedbackItems, loadFinanceDocuments, loadManagementAccounts, loadMeetingNotes, loadOperationalAlerts, loadOrganizationSalesDashboard, loadPayrollWorkspace, loadStaffCategories, loadStaffSensitiveProfile, loadTabletDevices, loadWorkforce, manageManagementAccount, markOperationalAlertRead, openFinanceDocument, previewTabletLeaveRequest, recordQrAttendance, reviewLeaveRequest, reviewWorkSchedule, revokeTabletDevice, runMonthEndOperations, saveCostCenter, saveCustomTossPlaceCredentials, saveOrganizationSettings, savePayrollContract, savePayrollDraft, saveStaffCategory, saveStaffOrder, saveStaffSensitiveProfile, saveTossPlaceConnection, saveWorkSchedule, saveWorkSchedulesBulk, sendSettlementEmail, signIn, signOut, signUp, supabase, syncOrganizationSales, tabletAttendance, tabletLeaveRequest, updateCorporateCard, updateFeedbackItem, updateStaffPhone, updateStaffProfile, uploadFinanceDocument, uploadStaffAvatar } from './lib/supabase';
 
@@ -880,6 +881,13 @@ const EXPENSE_SECTIONS = [
 function ManagerReceiptUpload({ organizationId, onClose, onUploaded }) {
   const [centers, setCenters] = useState([]); const [files, setFiles] = useState([]); const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
   useEffect(() => { loadCostCenters(organizationId).then(setCenters).catch(error => setMessage(error.message || '부서·섹션을 불러오지 못했습니다.')); }, [organizationId]);
+  const selectFiles = async event => {
+    const selected = Array.from(event.target.files || []).slice(0, 20); if (!selected.length) return;
+    setBusy(true); setMessage('OCR에 맞게 사진을 준비하고 있어요.');
+    try { const next = await prepareReceiptFiles(selected); const issues = (await Promise.all(next.map(inspectReceiptImage))).flat(); setFiles(next); setMessage(issues.length ? issues[0].message : '사진 확인 완료 · 부서와 결제수단을 선택해 주세요.'); }
+    catch (error) { setFiles([]); event.target.value = ''; setMessage(error.message || '영수증 사진을 준비하지 못했습니다.'); }
+    finally { setBusy(false); }
+  };
   const submit = async event => {
     event.preventDefault(); if (!files.length) return setMessage('영수증 사진을 선택해 주세요.');
     const form = new FormData(event.currentTarget); setBusy(true); setMessage('영수증 원본을 저장하고 있어요.');
@@ -891,15 +899,15 @@ function ManagerReceiptUpload({ organizationId, onClose, onUploaded }) {
     finally { setBusy(false); }
   };
   return <Modal title="영수증 업로드" onClose={busy ? undefined : onClose} variant="manager-receipt-modal">
-    <p className="modal-text">총관리자가 영수증 원본을 직접 등록합니다. 업로드 후 문자·품목 인식과 카드 대조가 자동으로 진행됩니다.</p>
+    <p className="modal-text">총관리자가 영수증 원본을 직접 등록합니다. 업로드 후 문자와 기본 결제정보 인식, 카드 대조가 자동으로 진행됩니다.</p>
     <form className="manager-receipt-form" onSubmit={submit}>
-      <label className="receipt-camera-input"><input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" capture="environment" multiple onChange={event => setFiles(Array.from(event.target.files || []).slice(0, 20))}/><strong>{files.length ? `${files.length}장 선택됨` : '카메라로 촬영 또는 사진 선택'}</strong><span>장당 최대 20MB · 최대 20장</span></label>
+      <label className="receipt-camera-input"><input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" capture="environment" multiple onChange={selectFiles}/><strong>{files.length ? `${files.length}장 선택됨` : '카메라로 촬영 또는 사진 선택'}</strong><span>최대 20장 · HEIC와 큰 사진은 OCR용 JPG로 자동 최적화</span></label>
       {files.length > 0 && <div className="manager-receipt-files">{files.map((file, index) => <span key={`${file.name}-${index}`}>{index + 1}. {file.name}</span>)}</div>}
       <label>부서·섹션<select name="costCenterId" required defaultValue=""><option value="">선택</option>{centers.map(center => <option key={center.id} value={center.id}>{center.name}</option>)}</select></label>
       <label>결제수단<select name="paymentMethod" required defaultValue="corporate_card"><option value="corporate_card">법인카드</option><option value="personal_card">개인카드</option><option value="cash">현금</option><option value="bank_transfer">계좌이체</option><option value="other">기타</option></select></label>
       <label>지출 목적 (선택)<input name="reason" maxLength="200" placeholder="예: 주방 식자재 구입"/></label>
       {message && <p className="manager-receipt-message">{message}</p>}
-      <button className="submit" disabled={busy || !files.length}>{busy ? '분석 중…' : '영수증 업로드'}</button>
+      <button className="submit" disabled={busy || !files.length}>{busy ? '처리 중…' : '영수증 업로드'}</button>
     </form>
   </Modal>;
 }
