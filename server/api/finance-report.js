@@ -70,7 +70,11 @@ export function buildDailyLaborMap({ payrollDrafts = [], payrollLines = [], atte
   return result;
 }
 
-const sumFinanceRows = rows => rows.reduce((sum, day) => ({ netSales: sum.netSales + day.sales, orderCount: sum.orderCount + day.orderCount, confirmedExpenses: sum.confirmedExpenses + day.confirmedExpenses, provisionalCardExpenses: sum.provisionalCardExpenses + day.provisionalCardExpenses, calculatedExpenses: sum.calculatedExpenses + day.calculatedExpenses, forecastExpenses: sum.forecastExpenses + day.forecastExpenses, kitchenPurchases: sum.kitchenPurchases + day.kitchenPurchases, hallPurchases: sum.hallPurchases + day.hallPurchases, otherExpenses: sum.otherExpenses + day.otherExpenses, cardFees: sum.cardFees + day.cardFees, rentExpense: sum.rentExpense + day.rentExpense, operatingExpenses: sum.operatingExpenses + day.operatingExpenses, laborCost: sum.laborCost + day.laborCost, operatingProfit: sum.operatingProfit + day.operatingProfit }), { netSales: 0, orderCount: 0, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses: 0, forecastExpenses: 0, kitchenPurchases: 0, hallPurchases: 0, otherExpenses: 0, cardFees: 0, rentExpense: 0, operatingExpenses: 0, laborCost: 0, operatingProfit: 0 });
+const sumFinanceRows = rows => rows.reduce((sum, day) => {
+  for (const [category, amount] of Object.entries(day.categoryBreakdown || {})) sum.categoryBreakdown[category] = (sum.categoryBreakdown[category] || 0) + Number(amount || 0);
+  for (const field of ['netSales','orderCount','confirmedExpenses','provisionalCardExpenses','calculatedExpenses','forecastExpenses','kitchenPurchases','hallPurchases','otherExpenses','cardFees','rentExpense','operatingExpenses','laborCost','operatingProfit']) sum[field] += Number(field === 'netSales' ? day.sales : day[field] || 0);
+  return sum;
+}, { netSales: 0, orderCount: 0, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses: 0, forecastExpenses: 0, kitchenPurchases: 0, hallPurchases: 0, otherExpenses: 0, cardFees: 0, rentExpense: 0, operatingExpenses: 0, laborCost: 0, operatingProfit: 0, categoryBreakdown: {} });
 const withFinanceRates = totals => ({ ...totals, averageOrderValue: totals.orderCount ? Math.round(totals.netSales / totals.orderCount) : null, kitchenCostRate: totals.netSales ? Math.round(totals.kitchenPurchases / totals.netSales * 1000) / 10 : null, hallCostRate: totals.netSales ? Math.round(totals.hallPurchases / totals.netSales * 1000) / 10 : null, laborCostRate: totals.netSales ? Math.round(totals.laborCost / totals.netSales * 1000) / 10 : null, profitMargin: totals.netSales ? Math.round((totals.operatingProfit / totals.netSales) * 1000) / 10 : null });
 
 export function buildFinanceReport({ from, to, salesRows = [], expenses = [], unreconciledCardTransactions = [], payrollDrafts = [], payrollLines = [], attendanceRecords = [], unresolvedReceipts = 0, cardFeeRate = 0, revenueRentRate = 0, asOfDate = koreaDateKey() }) {
@@ -83,6 +87,7 @@ export function buildFinanceReport({ from, to, salesRows = [], expenses = [], un
     const dayUnreconciledCards = unreconciledCardTransactions.filter(item => dateOnly(item.approved_at) === date);
     const sales = daySales.reduce((sum, row) => sum + Number(row.completed_amount || 0), 0); const orderCount = daySales.reduce((sum, row) => sum + Number(row.completed_order_count || 0), 0);
     const confirmedExpenses = dayExpenses.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+    const categoryBreakdown = dayExpenses.reduce((result, item) => { const category = String(item.category || '').trim() || '미분류'; result[category] = (result[category] || 0) + Number(item.total_amount || 0); return result; }, {});
     const kitchenPurchases = dayExpenses.filter(item => /주방|식자재|재료/.test(String(item.category || ''))).reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
     const hallPurchases = dayExpenses.filter(item => /홀|음료|주류/.test(String(item.category || ''))).reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
     const provisionalCardExpenses = dayUnreconciledCards.reduce((sum, item) => sum + Number(item.net_amount || 0), 0);
@@ -92,7 +97,7 @@ export function buildFinanceReport({ from, to, salesRows = [], expenses = [], un
     const month = date.slice(0, 7); const monthlyLabor = payrollByMonth.get(month) || 0;
     const isOpenMonth = month >= asOfDate.slice(0, 7);
     const laborCost = isOpenMonth ? Math.round(monthlyLabor / monthDays(date)) : dailyLabor.has(date) ? dailyLabor.get(date) : Math.round(monthlyLabor / monthDays(date));
-    return { date, dataStatus: date === asOfDate ? 'in_progress' : 'actual', sales, orderCount, averageOrderValue: orderCount ? Math.round(sales / orderCount) : null, confirmedExpenses, provisionalCardExpenses, calculatedExpenses, forecastExpenses: 0, kitchenPurchases, hallPurchases, otherExpenses, cardFees, rentExpense, operatingExpenses, laborCost, operatingProfit: sales - operatingExpenses - laborCost };
+    return { date, dataStatus: date === asOfDate ? 'in_progress' : 'actual', sales, orderCount, averageOrderValue: orderCount ? Math.round(sales / orderCount) : null, confirmedExpenses, provisionalCardExpenses, calculatedExpenses, forecastExpenses: 0, kitchenPurchases, hallPurchases, otherExpenses, categoryBreakdown, cardFees, rentExpense, operatingExpenses, laborCost, operatingProfit: sales - operatingExpenses - laborCost };
   });
   const baseline = actualSeries.filter(day => day.date < asOfDate && day.sales > 0);
   const baselineSales = baseline.reduce((sum, day) => sum + day.sales, 0);
@@ -109,7 +114,7 @@ export function buildFinanceReport({ from, to, salesRows = [], expenses = [], un
     const forecastExpenses = Math.round(sales * variableExpenseRate);
     const cardFees = Math.round(sales * Number(cardFeeRate || 0)); const rentExpense = Math.round(sales * Number(revenueRentRate || 0));
     const calculatedExpenses = cardFees + rentExpense; const operatingExpenses = forecastExpenses + calculatedExpenses;
-    return { ...day, dataStatus: 'forecast', sales, orderCount, averageOrderValue: orderCount ? Math.round(sales / orderCount) : null, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses, forecastExpenses, kitchenPurchases: 0, hallPurchases: 0, otherExpenses: 0, cardFees, rentExpense, operatingExpenses, operatingProfit: sales - operatingExpenses - day.laborCost };
+    return { ...day, dataStatus: 'forecast', sales, orderCount, averageOrderValue: orderCount ? Math.round(sales / orderCount) : null, confirmedExpenses: 0, provisionalCardExpenses: 0, calculatedExpenses, forecastExpenses, kitchenPurchases: 0, hallPurchases: 0, otherExpenses: 0, categoryBreakdown: {}, cardFees, rentExpense, operatingExpenses, operatingProfit: sales - operatingExpenses - day.laborCost };
   });
   const actualRows = series.filter(day => day.dataStatus !== 'forecast'); const forecastRows = series.filter(day => day.dataStatus === 'forecast');
   const totals = sumFinanceRows(series); const actualTotals = sumFinanceRows(actualRows); const forecastTotals = sumFinanceRows(forecastRows);

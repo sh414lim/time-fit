@@ -13,7 +13,7 @@ export function financeReportCsvRows({ report, periodType }) {
     ['데이터 기준 시각',audit.sourceCutoffAt || audit.generatedAt || '-','','','',''],
     ['증빙률',`${completeness.evidenceRate ?? 0}%`,'미증빙 확정지출',(completeness.confirmedExpenses || 0) - (completeness.evidencedExpenses || 0),'미대사 카드',completeness.unresolvedCardTransactions || 0],
     ['카드 연결 상태',completeness.cardSyncHealthy === false ? `확인 필요 ${completeness.unhealthyConnections || 0}건` : '정상','인건비 기준',laborLabels[completeness.laborBasis] || completeness.laborBasis || '-','',''],
-    ['주방 구매비',report.totals.kitchenPurchases || 0,'홀 구매비',report.totals.hallPurchases || 0,'기타 확정 지출',report.totals.otherExpenses || 0],
+    ['확정 지출 카테고리별 합계',...Object.entries(report.actualTotals?.categoryBreakdown || report.totals.categoryBreakdown || {}).flatMap(([category, amount]) => [category, amount])],
     ['카드수수료',report.totals.cardFees || 0,'매출연동 임대료',report.totals.rentExpense || 0,'평균 주문단가',report.totals.averageOrderValue || 0],
     ['운영지출 · 잠정 포함',report.totals.operatingExpenses || 0,'증빙 확정 지출',report.totals.confirmedExpenses || 0,'미증빙 카드 지출',report.totals.provisionalCardExpenses || 0],
     ['자동 계산 비용',report.totals.calculatedExpenses || 0,'카드수수료',report.totals.cardFees || 0,'매출연동 임대료',report.totals.rentExpense || 0],
