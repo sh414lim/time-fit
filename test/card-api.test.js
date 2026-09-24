@@ -195,6 +195,7 @@ test('버터빌라 손익 기준으로 구매비·카드수수료·매출연동 
   });
   assert.equal(report.totals.kitchenPurchases, 200000);
   assert.equal(report.totals.hallPurchases, 50000);
+  assert.deepEqual(report.actualTotals.categoryBreakdown, { '주방 식자재': 200000, '홀 음료·주류': 50000, '소모품': 30000 });
   assert.equal(report.totals.cardFees, 22000);
   assert.equal(report.totals.rentExpense, 150000);
   assert.equal(report.totals.averageOrderValue, 25000);

@@ -112,9 +112,7 @@ export async function downloadFinanceReportXlsx({ report, periodType }) {
   cost.addRow(['항목', '현재 실적', '미래 예상', '기간 합계', '보고서 합계', '차이', '산정 기준']);
   const costItems = [
     ['netSales', '순매출', '완료 주문 매출 / 요일별 예상'],
-    ['kitchenPurchases', '주방 구매비', '분류된 확정 지출만'],
-    ['hallPurchases', '홀 구매비', '분류된 확정 지출만'],
-    ['otherExpenses', '기타 확정 지출', '주방·홀 제외 확정 지출'],
+    ...Object.entries(report.actualTotals?.categoryBreakdown || report.totals?.categoryBreakdown || {}).map(([category]) => [`category:${category}`, category, '확정 지출 카테고리별 합계']),
     ['confirmedExpenses', '증빙 확정 지출', '지출 원장'],
     ['provisionalCardExpenses', '미증빙 카드 지출', '잠정 반영 · 확정 후 중복 제외'],
     ['forecastExpenses', '미래 예상 변동지출', '실적 변동지출률 적용'],
@@ -127,8 +125,12 @@ export async function downloadFinanceReportXlsx({ report, periodType }) {
   ];
   costItems.forEach(([key, label, basis]) => {
     const index = cost.lastRow.number + 1;
-    const row = cost.addRow([label, Number((report.actualTotals || report.totals)?.[key] || 0), Number(report.forecastTotals?.[key] || 0), null, Number(report.totals?.[key] || 0), null, basis]);
-    row.getCell(4).value = { formula: `B${index}+C${index}`, result: Number(report.totals?.[key] || 0) };
+    const category = key.startsWith('category:') ? key.slice(9) : null;
+    const actualValue = category ? Number((report.actualTotals?.categoryBreakdown || report.totals?.categoryBreakdown || {})[category] || 0) : Number((report.actualTotals || report.totals)?.[key] || 0);
+    const forecastValue = category ? 0 : Number(report.forecastTotals?.[key] || 0);
+    const totalValue = category ? Number(report.totals?.categoryBreakdown?.[category] || actualValue) : Number(report.totals?.[key] || 0);
+    const row = cost.addRow([label, actualValue, forecastValue, null, totalValue, null, basis]);
+    row.getCell(4).value = { formula: `B${index}+C${index}`, result: totalValue };
     row.getCell(6).value = { formula: `D${index}-E${index}`, result: 0 };
   });
   const rateStart = cost.lastRow.number + 2;
