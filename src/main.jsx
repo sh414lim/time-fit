@@ -901,7 +901,7 @@ function ManagerReceiptUpload({ organizationId, onClose, onUploaded }) {
   return <Modal title="영수증 업로드" onClose={busy ? undefined : onClose} variant="manager-receipt-modal">
     <p className="modal-text">총관리자가 영수증 원본을 직접 등록합니다. 업로드 후 문자와 기본 결제정보 인식, 카드 대조가 자동으로 진행됩니다.</p>
     <form className="manager-receipt-form" onSubmit={submit}>
-      <label className="receipt-camera-input"><input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" capture="environment" multiple onChange={selectFiles}/><strong>{files.length ? `${files.length}장 선택됨` : '카메라로 촬영 또는 사진 선택'}</strong><span>최대 20장 · HEIC와 큰 사진은 OCR용 JPG로 자동 최적화</span></label>
+      <label className="receipt-camera-input"><input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple onChange={selectFiles}/><strong>{files.length ? `${files.length}장 선택됨` : '카메라로 촬영 또는 사진 선택'}</strong><span>최대 20장 · HEIC와 큰 사진은 OCR용 JPG로 자동 최적화</span></label>
       {files.length > 0 && <div className="manager-receipt-files">{files.map((file, index) => <span key={`${file.name}-${index}`}>{index + 1}. {file.name}</span>)}</div>}
       <label>부서·섹션<select name="costCenterId" required defaultValue=""><option value="">선택</option>{centers.map(center => <option key={center.id} value={center.id}>{center.name}</option>)}</select></label>
       <label>결제수단<select name="paymentMethod" required defaultValue="corporate_card"><option value="corporate_card">법인카드</option><option value="personal_card">개인카드</option><option value="cash">현금</option><option value="bank_transfer">계좌이체</option><option value="other">기타</option></select></label>
