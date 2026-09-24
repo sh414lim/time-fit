@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   approveReceiptExpense,
   bulkConfirmExpenseMatches,
@@ -15,7 +15,7 @@ import {
 
 const money = value => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW', maximumFractionDigits: 0 }).format(Number(value) || 0);
 
-export default function ExpenseReviewQueue({ organizationId, canReview = true }) {
+export default function ExpenseReviewQueue({ organizationId, canReview = true, focusDocumentId = '' }) {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
@@ -26,6 +26,7 @@ export default function ExpenseReviewQueue({ organizationId, canReview = true })
   const [costCenterId, setCostCenterId] = useState('');
   const [status, setStatus] = useState('attention');
   const [originalUrls, setOriginalUrls] = useState({});
+  const focusedDocumentId = useRef('');
 
   const refresh = async () => {
     if (!organizationId) return;
@@ -36,6 +37,15 @@ export default function ExpenseReviewQueue({ organizationId, canReview = true })
   };
   useEffect(() => { refresh(); }, [organizationId, status, costCenterId]);
   useEffect(() => { if (organizationId) loadCostCenters(organizationId).then(setCostCenters).catch(() => setCostCenters([])); }, [organizationId]);
+  useEffect(() => {
+    if (!focusDocumentId || loading || focusedDocumentId.current === focusDocumentId) return;
+    const targetDocument = documents.find(item => item.id === focusDocumentId);
+    if (!targetDocument) return;
+    focusedDocumentId.current = focusDocumentId;
+    setExpandedId(focusDocumentId);
+    if (!originalUrls[focusDocumentId]) openFinanceDocument(targetDocument.storage_path).then(url => setOriginalUrls(urls => ({ ...urls, [focusDocumentId]: url }))).catch(error => setMessage(error.message || '영수증 원본을 불러오지 못했습니다.'));
+    requestAnimationFrame(() => window.document.getElementById(`expense-review-${focusDocumentId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }, [documents, focusDocumentId, loading, originalUrls]);
 
   const toggleExpanded = async document => {
     if (expandedId === document.id) { setExpandedId(''); return; }
@@ -128,7 +138,7 @@ export default function ExpenseReviewQueue({ organizationId, canReview = true })
       const topMatch = document.matches?.[0]; const expense = topMatch?.expense || document.expense; const extracted = document.extracted_data || {}; const expanded = expandedId === document.id;
       if (['uploaded','queued','processing'].includes(document.processing_status)) return <article className="expense-review-item" key={document.id}><div className="expense-review-summary"><div><b>{document.title}</b><span>원본 저장 완료 · 문자와 기본 결제정보를 확인하고 있어요.</span></div><div className="expense-review-actions"><button className="outline" onClick={() => openOriginal(document)}>원본 보기</button><button className="outline" disabled={Boolean(busyId)} onClick={() => retry(document)}>{busyId === document.id ? '확인 중…' : '처리 상태 확인'}</button></div></div></article>;
       if (document.processing_status === 'failed') return <article className="expense-review-item failed" key={document.id}><div className="expense-review-summary"><div><b>{document.title}</b><span>OCR 자동 분석 실패 · 원본은 안전하게 보관 중</span></div><div className="expense-review-actions"><button className="outline" onClick={() => openOriginal(document)}>원본 보기</button><button className="submit" disabled={Boolean(busyId)} onClick={() => retry(document)}>{busyId === document.id ? '재분석 중…' : '다시 분석'}</button></div></div><div className="receipt-processing-error"><b>실패 원인</b><span>{document.processing_error || '외부 분석 서비스 응답을 확인해 주세요.'}</span></div></article>;
-      return <article className="expense-review-item" key={document.id}>
+      return <article className="expense-review-item" id={`expense-review-${document.id}`} key={document.id}>
         <div className="expense-review-summary">{topMatch?.status === 'suggested' && Number(topMatch.score) >= 95 && <input className="expense-select" type="checkbox" aria-label={`${extracted.merchantName || document.title} 일괄 확정 선택`} checked={selectedIds.includes(topMatch.id)} onChange={event => setSelectedIds(ids => event.target.checked ? [...new Set([...ids, topMatch.id])] : ids.filter(id => id !== topMatch.id))}/>}<div><b>{extracted.merchantName || document.title}</b><span>{extracted.transactionDate || document.document_date || '날짜 확인 필요'} · {money(extracted.totalAmount)} · {document.review_status === 'change_requested' ? '수정 요청' : document.review_status === 'approved' ? '승인 완료' : '관리자 검토'}</span></div><div className="expense-review-actions"><button className="outline" onClick={() => openOriginal(document)}>원본 보기</button><button className="outline" onClick={() => toggleExpanded(document)}>{expanded ? '접기' : '검토하기'}</button></div></div>
         <div className="expense-match-summary"><span>카드 후보 <b>{document.matches?.length || 0}건</b></span>{topMatch ? <><span>{topMatch.transaction?.merchant_name || '사용처 미확인'} · {money(topMatch.transaction?.net_amount)}</span><em>{topMatch.score}점</em></> : <span>일치 후보 없음 · 직접 지출로 검토</span>}</div>
         {expanded && <div className="expense-review-detail">
