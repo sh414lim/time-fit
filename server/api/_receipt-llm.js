@@ -117,7 +117,7 @@ export async function extractReceiptWithLlm(ocrText) {
 }
 
 export function mergeReceiptExtractions(ruleBased, llmResult) {
-  if (!llmResult?.data) return { ...ruleBased, category: null, confidence: 0.45, fieldConfidence: {}, lineItems: [], extractionProvider: 'rules' };
+  if (!llmResult?.data) return { ...ruleBased, category: null, confidence: ruleBased.spatialExtraction ? 0.82 : 0.45, fieldConfidence: ruleBased.spatialExtraction ? { merchantName: 0.85, transactionDate: 0.95, totalAmount: ruleBased.totalAmount ? 0.92 : 0.4, paymentMethod: 0.4 } : {}, lineItems: ruleBased.lineItems || [], extractionProvider: ruleBased.spatialExtraction ? 'google_vision_spatial_rules' : 'rules' };
   const ai = llmResult.data;
   return {
     merchantName: ai.merchantName || ruleBased.merchantName,
@@ -129,7 +129,7 @@ export function mergeReceiptExtractions(ruleBased, llmResult) {
     approvalNumber: ai.approvalNumber || ruleBased.approvalNumber,
     cardLast4: ai.cardLast4 || ruleBased.cardLast4,
     paymentMethod: ai.paymentMethod, category: ai.category, confidence: ai.confidence,
-    fieldConfidence: ai.fieldConfidence, lineItems: ai.lineItems,
+    fieldConfidence: ai.fieldConfidence, lineItems: ai.lineItems?.length ? ai.lineItems : (ruleBased.lineItems || []),
     extractionProvider: 'openai_structured_outputs',
   };
 }
