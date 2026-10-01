@@ -92,6 +92,16 @@ const sentimentFor = (text, rating) => {
 
 export function classifyNaverReview(review) {
   const text = String(review?.content || '').toLowerCase();
+  const storedAnalysis = Array.isArray(review?.analysis) ? review.analysis[0] : review?.analysis;
+  if (storedAnalysis && Array.isArray(storedAnalysis.mentions)) {
+    const themeLabels = new Map(NAVER_REVIEW_THEMES.map(theme => [theme.id, theme.label]));
+    const mentions = storedAnalysis.mentions.flatMap(mention => {
+      if (!themeLabels.has(mention?.themeId) || !['positive','negative','neutral'].includes(mention?.sentiment)) return [];
+      const keywordLabel = String(mention.keyword || themeLabels.get(mention.themeId)).trim().slice(0, 40);
+      return [{ themeId: mention.themeId, themeLabel: themeLabels.get(mention.themeId), keywordId: `ai:${mention.themeId}:${keywordLabel.toLowerCase()}`, keywordLabel, sentiment: mention.sentiment, confidence: Number(mention.confidence) || 0 }];
+    });
+    return { review, date: reviewDateKey(review?.occurred_at), sentiment: storedAnalysis.sentiment || 'neutral', mentions, summary: storedAnalysis.summary || '', urgency: storedAnalysis.urgency || 'normal', analysisModel: storedAnalysis.model || null };
+  }
   const sentiment = sentimentFor(text, review?.rating);
   const clauses = text.split(/[.!?\n]|(?:하지만|그런데|다만|반면|지만|인데)/).map(value => value.trim()).filter(Boolean);
   const mentions = [];

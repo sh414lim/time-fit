@@ -13,7 +13,7 @@ function KeywordList({ title, tone, rows, onSelect }) {
 function ReviewMatches({ analytics, selection, onClear }) {
   if (!selection) return null;
   const matches = analytics.classified.filter(item => item.mentions.some(mention => (selection.type === 'theme' ? mention.themeId === selection.id : mention.keywordId === selection.id) && (!selection.sentiment || mention.sentiment === selection.sentiment)));
-  return <section className="card full-card review-match-card"><div className="card-title"><div><h2>{selection.label} 관련 리뷰</h2><p>선택한 테마·키워드가 감지된 실제 네이버 리뷰입니다.</p></div><button onClick={onClear}>닫기</button></div>{matches.length ? matches.slice(0, 50).map(item => <article key={item.review.id || `${item.date}-${item.review.content}`}><div><b>{item.review.author_name || '익명'}</b><span>{item.date}{item.review.rating ? ` · ${item.review.rating}점` : ''}</span></div><p>{item.review.content}</p><div>{item.mentions.filter(mention => (selection.type === 'theme' ? mention.themeId === selection.id : mention.keywordId === selection.id)).map(mention => <span className={`review-sentiment-chip ${mention.sentiment}`} key={`${mention.themeId}-${mention.keywordId}`}>{mention.keywordLabel} · {mention.sentiment === 'positive' ? '좋아요' : mention.sentiment === 'negative' ? '아쉬워요' : '중립'}</span>)}</div></article>) : <div className="empty-schedule"><b>조건에 맞는 리뷰가 없어요.</b></div>}</section>;
+  return <section className="card full-card review-match-card"><div className="card-title"><div><h2>{selection.label} 관련 리뷰</h2><p>선택한 테마·키워드가 감지된 실제 네이버 리뷰입니다.</p></div><button onClick={onClear}>닫기</button></div>{matches.length ? matches.slice(0, 50).map(item => <article key={item.review.id || `${item.date}-${item.review.content}`}><div><b>{item.review.author_name || '익명'}</b><span>{item.date}{item.review.rating ? ` · ${item.review.rating}점` : ''}{item.urgency === 'urgent' ? ' · 긴급 확인' : item.urgency === 'high' ? ' · 우선 확인' : ''}</span></div>{item.summary && <strong className="review-ai-summary">AI 요약 · {item.summary}</strong>}<p>{item.review.content}</p><div>{item.mentions.filter(mention => (selection.type === 'theme' ? mention.themeId === selection.id : mention.keywordId === selection.id)).map(mention => <span className={`review-sentiment-chip ${mention.sentiment}`} key={`${mention.themeId}-${mention.keywordId}`}>{mention.keywordLabel} · {mention.sentiment === 'positive' ? '좋아요' : mention.sentiment === 'negative' ? '아쉬워요' : '중립'}</span>)}</div></article>) : <div className="empty-schedule"><b>조건에 맞는 리뷰가 없어요.</b></div>}</section>;
 }
 
 export default function NaverAiReviewDashboard({ items = [] }) {
@@ -27,9 +27,11 @@ export default function NaverAiReviewDashboard({ items = [] }) {
   const maxTheme = Math.max(1, ...analytics.themes.map(item => item.total));
   const maxTrend = Math.max(1, ...analytics.trend.map(item => item.positive + item.negative));
   const selectedDate = anchor || analytics.anchor;
+  const serverAnalyzed = items.filter(item => item.source === 'naver' && item.analysis).length;
   return <div className="naver-review-dashboard">
     <section className="card full-card review-overview-card"><div className="review-dashboard-head"><div><p className="review-eyebrow">NAVER REVIEW INSIGHTS · BETA</p><h2>AI 리뷰 통계</h2><span>음식점 리뷰를 9개 테마의 좋아요·아쉬워요 언급으로 자동 분석합니다.</span></div><div className="review-period-controls"><div>{PERIODS.map(item => <button className={period === item.id ? 'selected' : ''} key={item.id} onClick={() => setPeriod(item.id)}>{item.label}</button>)}</div><label>기준일<input type="date" value={selectedDate} onChange={event => setAnchor(event.target.value)}/></label></div></div>
       <div className="review-analysis-note"><b>{rangeLabel(analytics.range)}</b><span>TimeFit의 1차 자동분석 결과이며 네이버가 제공하는 공식 통계 수치와는 다를 수 있습니다. 한 리뷰에서 여러 테마가 집계될 수 있습니다.</span></div>
+      <div className="review-ai-status" role="status"><i/>{serverAnalyzed ? `서버 AI 분석 ${serverAnalyzed}건 · 변경된 리뷰만 자동 재분석` : '새 리뷰는 서버 AI 분석을 자동 시도하며 준비 전에는 브라우저 1차 분석을 표시합니다.'}</div>
       <div className="review-kpi-grid"><article><span>기간 내 네이버 리뷰</span><strong>{analytics.reviewCount}<small>건</small></strong><p>저장된 전체 {analytics.totalSourceReviews}건</p></article><article><span>분석된 리뷰</span><strong>{analytics.analyzedReviewCount}<small>건</small></strong><p>중립·테마 미감지 {analytics.neutralReviews}건 제외</p></article><article className="positive"><span>좋아요 언급</span><strong>{analytics.positiveMentions}<small>회</small></strong><p>리뷰 수가 아닌 테마 언급 수</p></article><article className="negative"><span>아쉬워요 언급</span><strong>{analytics.negativeMentions}<small>회</small></strong><p>우선 확인할 운영 신호</p></article></div>
       {!analytics.totalSourceReviews && <div className="review-source-empty"><b>분석할 네이버 리뷰가 아직 없습니다.</b><span>공식 수집 연동이 준비되면 새 리뷰를 자동으로 분석합니다. 수동 입력을 정상 운영 경로로 요구하지 않습니다.</span></div>}
     </section>
@@ -42,4 +44,3 @@ export default function NaverAiReviewDashboard({ items = [] }) {
     <ReviewMatches analytics={analytics} selection={selection} onClear={() => setSelection(null)}/>
   </div>;
 }
-

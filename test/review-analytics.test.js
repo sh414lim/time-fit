@@ -46,3 +46,12 @@ test('리뷰 수와 테마 언급 수를 분리하고 중립 리뷰는 분석 �
   assert.equal(result.neutralReviews, 1);
   assert.ok(result.mentionCount >= 2);
 });
+
+test('저장된 서버 AI 분석을 규칙 기반 결과보다 우선 사용한다', () => {
+  const item = review('ai-1', '좋은지 나쁜지 애매한 문장', '2026-09-08T03:00:00Z');
+  item.analysis = { sentiment: 'negative', urgency: 'high', summary: '좌석 간격이 좁다는 의견', model: 'test-model', mentions: [{ themeId: 'seat', keyword: '좌석 간격', sentiment: 'negative', confidence: 0.95 }] };
+  const classified = classifyNaverReview(item);
+  assert.equal(classified.urgency, 'high');
+  assert.equal(classified.summary, '좌석 간격이 좁다는 의견');
+  assert.deepEqual(classified.mentions.map(mention => [mention.themeId, mention.sentiment]), [['seat', 'negative']]);
+});

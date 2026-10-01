@@ -12,6 +12,7 @@
 .review-period-controls input{height:39px;border:1px solid #e5e8eb;border-radius:9px;padding:0 10px;background:#fff;font:600 12px inherit;color:#333d4b}
 .review-analysis-note{display:flex;align-items:center;gap:12px;margin-top:19px;padding:12px 14px;border-radius:12px;background:#f6f8fa;color:#6b7684;font-size:11px;line-height:1.5}
 .review-analysis-note b{flex:none;color:#333d4b}
+.review-ai-status{display:flex;align-items:center;gap:8px;margin-top:10px;color:#53657c;font-size:11px;font-weight:700}.review-ai-status i{width:8px;height:8px;border-radius:50%;background:#3182f6;box-shadow:0 0 0 4px #e8f3ff}.review-ai-summary{display:block;margin:9px 0 -3px;color:#2877dc;font-size:12px;line-height:1.55}
 .review-kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
 .review-kpi-grid article{padding:16px;border:1px solid #edf0f3;border-radius:14px;background:#fff}
 .review-kpi-grid article>span{display:block;color:#6b7684;font-size:11px;font-weight:700}
@@ -94,4 +95,3 @@
 .review-trend-chart>div{grid-template-rows:130px 22px}
 .review-trend-bars{height:120px}
 }
-

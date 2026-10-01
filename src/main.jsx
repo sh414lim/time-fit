@@ -19,6 +19,7 @@ import ExpenseReminderSettings from './features/finance/ExpenseReminderSettings'
 import ExpenseLedger from './features/finance/ExpenseLedger';
 import ManualExpenseForm from './features/finance/ManualExpenseForm';
 import NaverAiReviewDashboard from './features/reviews/NaverAiReviewDashboard';
+import { analyzeNaverReviews, loadNaverReviewAnalyses } from './features/reviews/reviewApi';
 import { inspectReceiptImage, prepareReceiptFiles } from './features/finance/receiptQuality';
 import { processReceiptDocument } from './lib/supabase';
 import { acceptEmployeeInvitation, activateTabletDevice, archiveCostCenter, bootstrapTossPlaceConnection, createCorporateCard, createFeedbackItem, createLeaveRequest, createManagementAccount, createManualStaff, createMeetingNote, createReceiptSubmission, deleteFinanceDocument, deleteStaffCategory, deleteWorkSchedule, disconnectCorporateCard, ensureManagerOrganization, getAuthContext, getCachedOrganizationSalesDashboard, getManagerTabletOrganization, getOrganizationSettings, getTabletDeviceContext, getTossPlaceConnection, grantStaffLeave, importCardTransactions, importFeedbackItems, inviteEmployeeByCode, isAuthSessionError, loadCardTransactions, loadCorporateCards, loadCostCenters, loadFeedbackItems, loadFinanceDocuments, loadManagementAccounts, loadMeetingNotes, loadOperationalAlerts, loadOrganizationSalesDashboard, loadPayrollWorkspace, loadStaffCategories, loadStaffSensitiveProfile, loadTabletDevices, loadWorkforce, manageManagementAccount, markOperationalAlertRead, openFinanceDocument, previewTabletLeaveRequest, recordQrAttendance, reviewLeaveRequest, reviewWorkSchedule, revokeTabletDevice, runMonthEndOperations, saveCostCenter, saveCustomTossPlaceCredentials, saveOrganizationSettings, savePayrollContract, savePayrollDraft, saveStaffCategory, saveStaffOrder, saveStaffSensitiveProfile, saveTossPlaceConnection, saveWorkSchedule, saveWorkSchedulesBulk, sendSettlementEmail, signIn, signOut, signUp, supabase, syncOrganizationSales, tabletAttendance, tabletLeaveRequest, updateCorporateCard, updateFeedbackItem, updateStaffPhone, updateStaffProfile, uploadFinanceDocument, uploadStaffAvatar } from './lib/supabase';
@@ -1074,8 +1075,25 @@ function FinanceDocuments({ organizationId, employees = [] }) {
 
 function FeedbackHub({ organizationId }) {
   const [items, setItems] = useState([]); const [notes, setNotes] = useState([]); const [loading, setLoading] = useState(true); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
-  const refresh = () => { setLoading(true); Promise.all([loadFeedbackItems(organizationId), loadMeetingNotes(organizationId)]).then(([feedback, meetings]) => { setItems(feedback); setNotes(meetings); }).catch(error => setMessage(error.message || '목록을 불러오지 못했습니다.')).finally(() => setLoading(false)); };
-  useEffect(() => { if (organizationId) refresh(); }, [organizationId]);
+  const analysisOrganizationRef = useRef('');
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      const [feedback, meetings, analysisResult] = await Promise.all([loadFeedbackItems(organizationId), loadMeetingNotes(organizationId), loadNaverReviewAnalyses(organizationId).catch(() => ({ analyses: [] }))]);
+      const analysisByItem = new Map((analysisResult.analyses || []).map(item => [item.feedback_item_id, item]));
+      setItems(feedback.map(item => ({ ...item, analysis: analysisByItem.get(item.id) || null }))); setNotes(meetings);
+    } catch (error) { setMessage(error.message || '목록을 불러오지 못했습니다.'); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => {
+    if (!organizationId) return;
+    refresh();
+    if (analysisOrganizationRef.current === organizationId) return;
+    analysisOrganizationRef.current = organizationId;
+    analyzeNaverReviews(organizationId).then(result => {
+      if (result.processed) refresh();
+    }).catch(() => {});
+  }, [organizationId]);
   const parseCsv = text => {
     const rows = []; let row = []; let cell = ''; let quoted = false;
     for (let index = 0; index < text.length; index += 1) {
@@ -1122,7 +1140,7 @@ function FeedbackHub({ organizationId }) {
         return [{ organization_id: organizationId, source, kind: 'review', author_name: author || null, content, rating: Number.isFinite(rating) ? Math.max(0, Math.min(5, rating)) : null, occurred_at: parsedDate && !Number.isNaN(parsedDate.getTime()) ? parsedDate.toISOString() : new Date().toISOString(), status: 'open', external_id: externalId || csvFingerprint(`${source}|${author}|${content}|${rawDate}|${rating || ''}`) }];
       });
       if (!imported.length) throw new Error('가져올 리뷰 내용이 없습니다.');
-      const result = await importFeedbackItems(imported); event.currentTarget.reset(); setMessage(`${result.count}건의 리뷰를 가져왔어요. 중복 리뷰는 최신 값으로 갱신됩니다.`); refresh();
+      const result = await importFeedbackItems(imported); event.currentTarget.reset(); setMessage(`${result.count}건의 리뷰를 가져왔어요. 중복 리뷰는 최신 값으로 갱신됩니다.`); await analyzeNaverReviews(organizationId).catch(() => null); refresh();
     } catch (error) { setMessage(error.message || 'CSV 리뷰를 가져오지 못했습니다.'); } finally { setBusy(false); }
   };
   const submitFeedback = async event => { event.preventDefault(); const form = new FormData(event.currentTarget); setBusy(true); try { await createFeedbackItem({ organization_id: organizationId, kind: form.get('kind'), author_name: form.get('author') || null, content: form.get('content'), occurred_at: new Date().toISOString() }); event.currentTarget.reset(); setMessage('컴플레인을 등록했어요.'); refresh(); } catch (error) { setMessage(error.message || '등록하지 못했습니다.'); } finally { setBusy(false); } };
