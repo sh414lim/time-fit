@@ -10,9 +10,9 @@ let refreshSessionInFlight = null;
 // A stalled network request must never leave the application behind an
 // indefinite full-screen loader. Keep the timeout here so auth and workforce
 // reads fail consistently and the UI can recover with a visible retry path.
-const requestWithTimeout = (request, label = '요청') => Promise.race([
+const requestWithTimeout = (request, label = '요청', timeoutMs = 15000) => Promise.race([
   request,
-  new Promise((_, reject) => window.setTimeout(() => reject(new Error(`${label}_timeout`)), 15000)),
+  new Promise((_, reject) => window.setTimeout(() => reject(new Error(`${label}_timeout`)), timeoutMs)),
 ]);
 
 // Supabase may report any of these while a persisted refresh token has already
@@ -140,7 +140,7 @@ export async function loadWorkforce(organizationId) {
   const client = requireClient();
   const context = await getAuthContext();
   const canViewPayroll = Boolean(context.isOrganizationOwner || context.managementAccount?.permissions?.includes('payroll.view'));
-  const staffColumns = `id,user_id,display_name,department,category_id,job_title,joined_on,phone_e164,avatar_path,sort_order${canViewPayroll ? ',pay_type,hourly_wage,daily_wage,monthly_salary,annual_salary' : ''}`;
+  const staffColumns = `id,user_id,display_name,department,category_id,job_title,joined_on,phone_e164,avatar_path,sort_order,employment_status,terminated_on,termination_reason${canViewPayroll ? ',pay_type,hourly_wage,daily_wage,monthly_salary,annual_salary' : ''}`;
   const [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult] = await requestWithTimeout(Promise.all([
     allWorkforceRows(() => client.from('timefit_user_staff').select(staffColumns).eq('organization_id', organizationId).order('sort_order').order('created_at').order('id')),
     allWorkforceRows(() => client.from('timefit_user_work_schedules').select('id,staff_id,work_date,starts_at,ends_at,break_minutes,break_paid,break_starts_at,break_ends_at,shift_name,is_day_off,status,approval_status,submitted_by,submitted_at,reviewed_by,reviewed_at,review_comment,updated_at').eq('organization_id', organizationId).order('work_date').order('id')),
@@ -383,7 +383,7 @@ export async function savePayrollDraft({ organizationId, settlementMonth, status
   return draft;
 }
 export async function loadFeedbackItems(organizationId) {
-  const { data, error } = await requireClient().from('timefit_user_feedback_items').select('*').eq('organization_id', organizationId).order('created_at', { ascending: false });
+  const { data, error } = await requireClient().from('timefit_user_feedback_items').select('*').eq('organization_id', organizationId).order('occurred_at', { ascending: false }).order('created_at', { ascending: false });
   if (error) throw error; return data || [];
 }
 export async function createFeedbackItem(item) {
@@ -399,6 +399,37 @@ export async function importFeedbackItems(items) {
   if (!items.length) return { count: 0 };
   const { data, error } = await requireClient().from('timefit_user_feedback_items').upsert(items, { onConflict: 'organization_id,source,external_id' }).select('id');
   if (error) throw error; return { count: data?.length || items.length };
+}
+
+async function reviewCollectorClientRequest(path, { method = 'GET', query, body, timeoutMs = 15000 } = {}) {
+  const client = requireClient();
+  const { data: { session } } = await client.auth.getSession();
+  if (!session?.access_token) throw new Error('로그인이 필요합니다.');
+  const search = query ? `?${new URLSearchParams(query).toString()}` : '';
+  const response = await requestWithTimeout(fetch(`/api/${path}${search}`, {
+    method,
+    cache: 'no-store',
+    headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  }), 'review_collector', timeoutMs);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || '리뷰 수집 요청을 완료하지 못했습니다.');
+  return payload;
+}
+
+export async function searchNaverReviewPlaces({ organizationId, query }) {
+  const payload = await reviewCollectorClientRequest('review-place-search', { method: 'POST', body: { organizationId, query }, timeoutMs: 45000 });
+  return payload.places || [];
+}
+
+export async function startNaverReviewCollection({ organizationId, place, searchQuery, limit = 5000 }) {
+  const payload = await reviewCollectorClientRequest('review-collection', { method: 'POST', body: { organizationId, placeId: place.placeId, placeName: place.name, address: place.address, searchQuery, limit } });
+  return payload.job;
+}
+
+export async function loadNaverReviewCollectionJob({ organizationId, jobId }) {
+  const payload = await reviewCollectorClientRequest('review-collection', { query: { organizationId, jobId } });
+  return payload.job;
 }
 export async function loadOperationalAlerts(organizationId) {
   const { data, error } = await requireClient().from('timefit_user_operational_alerts').select('*, timefit_user_staff(display_name, account:timefit_user_accounts(display_name))').eq('organization_id', organizationId).order('scheduled_for', { ascending: false }).limit(20);
@@ -759,6 +790,17 @@ export async function grantStaffLeave({ staffId, amount, reason }) {
   const { data, error } = await requireClient().rpc('timefit_user_grant_leave', { p_staff_id: staffId, p_amount: amount, p_reason: reason || null });
   if (error) throw error; return data;
 }
+export async function manageStaffLifecycle({ organizationId, staffId, action, effectiveOn, reason }) {
+  const { data, error } = await requireClient().rpc('timefit_user_manage_staff_lifecycle', {
+    p_organization_id: organizationId,
+    p_staff_id: staffId,
+    p_action: action,
+    p_effective_on: effectiveOn || null,
+    p_reason: reason,
+  });
+  if (error) throw error;
+  return data;
+}
 export async function runMonthEndOperations({ organizationId, targetMonth }) {
   const { data, error } = await requireClient().rpc('timefit_user_run_month_end_operations', {
     p_organization_id: organizationId,
@@ -769,7 +811,7 @@ export async function runMonthEndOperations({ organizationId, targetMonth }) {
 }
 export async function createManualStaff({ organizationId, name, phone, department, categoryId, jobTitle, payType, hourlyWage, dailyWage, monthlySalary, annualSalary, joinedOn }) {
   const { data, error } = await requireClient().rpc('timefit_user_create_manual_staff', {
-    p_name: name, p_phone: phone, p_department: department || null, p_job_title: jobTitle || null,
+    p_organization_id: organizationId, p_name: name, p_phone: phone, p_department: department || null, p_job_title: jobTitle || null,
     p_pay_type: payType, p_hourly_wage: hourlyWage || null, p_daily_wage: dailyWage || null, p_monthly_salary: monthlySalary || null, p_annual_salary: annualSalary || null, p_joined_on: joinedOn || null, p_category_id: categoryId || null,
   });
   if (error) throw error; return data;
