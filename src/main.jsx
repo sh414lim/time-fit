@@ -10,6 +10,7 @@ import { openSchedulePrintView } from './schedulePdf';
 import { OperationsHome, WeeklyFeedback, AttendanceIssueList, CardReviewList } from './features/operations/OperationsFeedback';
 import { attendanceIssues, payrollAttendanceRange, staffTodayStatus } from '../shared/operations.js';
 import { invalidateViewCache, readViewCache, writeViewCache } from './lib/viewCache';
+import { readPayrollMonth, writePayrollMonth } from './lib/payrollState';
 import CardConnectionWizard from './features/finance/CardConnectionWizard';
 import ExpenseReviewQueue from './features/finance/ExpenseReviewQueue';
 import FinanceReportDashboard from './features/finance/FinanceReportDashboard';
@@ -830,13 +831,15 @@ function ScheduleRegistrationForm({ employees, schedules, leaveRequests, organiz
 function Leave({ setModal, employees, onSelect, leaveRequests }) { const pending = leaveRequests.filter(item => item.status === '승인 대기'); const approvedDays = leaveRequests.filter(item => item.status === '승인 완료').reduce((sum, item) => sum + Number(String(item.amount).replace('일', '')), 0); return <><div className="page-title"><div><p>{todayKey.slice(0, 4)}년 실제 신청 데이터</p><h1>휴가 · 연차 관리</h1></div><button className="cta" onClick={() => pending[0] && setModal(pending[0])}>요청 검토</button></div><section className="leave-overview"><div className="balance card"><p>승인된 휴가 사용</p><strong>{approvedDays}<small>일</small></strong><div><span>전체 직원 합계</span><span>승인 완료 기준</span></div><div className="progress"><i style={{ width: `${Math.min(100, approvedDays / Math.max(1, leaveRequests.length * 15) * 100)}%` }}/></div></div><div className="card leave-info"><h2>승인 대기 중인 휴가</h2><p>총 {pending.length}건의 요청을 확인해 주세요.</p><button onClick={() => pending[0] && setModal(pending[0])}>{pending.length ? '요청 확인하기 →' : '대기 중인 요청이 없어요'}</button></div></section><section className="card full-card"><div className="card-title"><div><h2>휴가 사용 내역</h2><p>Supabase 휴가 신청 순서</p></div></div>{leaveRequests.length ? leaveRequests.map(request => <div className="leave-row clickable-row" key={request.id} onClick={() => { onSelect(employees.find(item => item.name === request.employee)); if (request.status === '승인 대기') setModal(request); }}><span><b>{request.date}</b><small>{request.employee}</small></span><span>{request.type} · {request.amount}</span><Chip type={request.status === '승인 완료' ? 'green' : request.status === '반려' ? 'gray' : 'orange'}>{request.status}</Chip></div>) : <p className="empty-state">등록된 휴가 신청이 없어요.</p>}</section></> }
 
 function Payroll({ employees, leaveRequests = [], onSelect, canManage = false, initialMonth, onOpenAttendance, organizationId, accountId }) {
-  const [month, setMonth] = useState(initialMonth || todayKey.slice(0, 7));
+  const [month, setMonth] = useState(() => initialMonth || readPayrollMonth(typeof window === 'undefined' ? null : window.sessionStorage, accountId, organizationId, todayKey.slice(0, 7)));
   const cacheKey = accountId && organizationId ? `payroll:${accountId}:${organizationId}:${month}` : null;
   // Payroll is expensive to assemble and its mutations explicitly invalidate
   // this key. Keep the last successful snapshot for the whole app session so
   // switching manager screens never starts the same requests again.
   const initialSnapshot = useRef(readViewCache(cacheKey, Date.now(), Infinity));
   const [workspace, setWorkspace] = useState(initialSnapshot.current?.workspace || { contracts: [], draft: null, lines: [] }); const [source, setSource] = useState(initialSnapshot.current?.source || null); const [loading, setLoading] = useState(!initialSnapshot.current); const [busy, setBusy] = useState(false); const [message, setMessage] = useState('');
+  useEffect(() => { writePayrollMonth(window.sessionStorage, accountId, organizationId, month); }, [accountId, organizationId, month]);
+  useEffect(() => { if (initialMonth && initialMonth !== month) setMonth(initialMonth); }, [initialMonth]);
   const bounds = value => { const [year, monthNumber] = value.split('-').map(Number); return { start: `${value}-01`, end: new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10) }; };
   const refresh = () => { if (!organizationId) return; setLoading(true); Promise.all([loadPayrollWorkspace(organizationId, month), loadWorkforce(organizationId)]).then(([nextWorkspace, workforce]) => { writeViewCache(cacheKey, { workspace: nextWorkspace, source: workforce }); setWorkspace(nextWorkspace); setSource(workforce); }).catch(error => setMessage(error.message || '급여 데이터를 불러오지 못했습니다.')).finally(() => setLoading(false)); };
   useEffect(() => { const cached = readViewCache(cacheKey, Date.now(), Infinity); if (cached) { setWorkspace(cached.workspace); setSource(cached.source); setLoading(false); } else { setWorkspace({ contracts: [], draft: null, lines: [] }); setSource(null); refresh(); } }, [cacheKey]);
