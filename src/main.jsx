@@ -1398,7 +1398,7 @@ function App() {
   const reorderEmployees = async (from, to) => {
     if (to < 0 || to >= employees.length) return;
     const previous = employees; const next = [...employees]; const [moved] = next.splice(from, 1); next.splice(to, 0, moved); setEmployees(next);
-    try { await saveStaffOrder(next.map(employee => employee.id)); }
+    try { await saveStaffOrder({ organizationId: authContext.membership?.organization_id, staffIds: next.map(employee => employee.id) }); setToast('직원 순서를 저장했어요.'); }
     catch (error) { setEmployees(previous); setToast(error.message || '직원 순서를 저장하지 못했습니다.'); }
   };
   useEffect(() => { if (authContext.membership) refreshWorkforce().catch(error => setToast(error.message || '업무 데이터를 불러오지 못했습니다.')); }, [authContext.membership?.organization_id]);

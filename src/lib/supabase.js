@@ -141,7 +141,7 @@ export async function loadWorkforce(organizationId) {
   const context = await getAuthContext();
   const canViewPayroll = Boolean(context.isOrganizationOwner || context.managementAccount?.permissions?.includes('payroll.view'));
   const staffColumns = `id,user_id,display_name,department,category_id,job_title,joined_on,phone_e164,avatar_path,sort_order,employment_status,terminated_on,termination_reason${canViewPayroll ? ',pay_type,hourly_wage,daily_wage,monthly_salary,annual_salary' : ''}`;
-  const [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult] = await requestWithTimeout(Promise.all([
+  const [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult, orderResult] = await requestWithTimeout(Promise.all([
     allWorkforceRows(() => client.from('timefit_user_staff').select(staffColumns).eq('organization_id', organizationId).order('sort_order').order('created_at').order('id')),
     allWorkforceRows(() => client.from('timefit_user_work_schedules').select('id,staff_id,work_date,starts_at,ends_at,break_minutes,break_paid,break_starts_at,break_ends_at,shift_name,is_day_off,status,approval_status,submitted_by,submitted_at,reviewed_by,reviewed_at,review_comment,updated_at').eq('organization_id', organizationId).order('work_date').order('id')),
     allWorkforceRows(() => client.from('timefit_user_leave_requests').select('id,staff_id,starts_on,ends_on,leave_type,amount,reason,status,review_comment,created_at').eq('organization_id', organizationId).order('created_at', { ascending: false }).order('id')),
@@ -149,8 +149,9 @@ export async function loadWorkforce(organizationId) {
     client.from('timefit_user_organization_settings').select('*').eq('organization_id', organizationId).maybeSingle(),
     allWorkforceRows(() => client.from('timefit_user_leave_grants').select('id,staff_id,amount,reason,grant_type,attendance_record_id,granted_at,created_at').eq('organization_id', organizationId).order('granted_at', { ascending: false }).order('id')),
     allWorkforceRows(() => client.from('timefit_user_staff_categories').select('id,name,color,sort_order').eq('organization_id', organizationId).order('sort_order').order('name').order('id')),
+    client.from('timefit_user_staff_order_preferences').select('staff_id,sort_order').eq('organization_id', organizationId).order('sort_order'),
   ]), 'workforce_load');
-  for (const result of [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult]) if (result.error) throw result.error;
+  for (const result of [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult, orderResult]) if (result.error) throw result.error;
   const userIds = (staffResult.data ?? []).map(item => item.user_id).filter(Boolean);
   const accountsResult = userIds.length
     ? await requestWithTimeout(client.from('timefit_user_accounts').select('id,display_name').in('id', userIds), 'workforce_accounts')
@@ -159,7 +160,12 @@ export async function loadWorkforce(organizationId) {
   const accounts = Object.fromEntries((accountsResult.data ?? []).map(item => [item.id, item]));
   const categories = categoriesResult.data ?? [];
   const categoryById = Object.fromEntries(categories.map(item => [item.id, item]));
-  const staffRows = staffResult.data ?? [];
+  const preferredOrder = new Map((orderResult.data ?? []).map(item => [item.staff_id, Number(item.sort_order)]));
+  const staffRows = [...(staffResult.data ?? [])].sort((a, b) => {
+    const aPreferred = preferredOrder.get(a.id); const bPreferred = preferredOrder.get(b.id);
+    if (aPreferred !== undefined || bPreferred !== undefined) return (aPreferred ?? Number.MAX_SAFE_INTEGER) - (bPreferred ?? Number.MAX_SAFE_INTEGER);
+    return (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0);
+  });
   const avatarPaths = staffRows.map(item => item.avatar_path).filter(Boolean);
   const signedAvatarUrls = avatarPaths.length
     ? await client.storage.from('timefit-staff-avatars').createSignedUrls(avatarPaths, 60 * 60)
@@ -189,10 +195,11 @@ export async function deleteStaffCategory(id) {
   if (error) throw error;
 }
 
-export async function saveStaffOrder(staffIds) {
-  const results = await Promise.all(staffIds.map((id, index) => requireClient().from('timefit_user_staff').update({ sort_order: index }).eq('id', id)));
-  const failed = results.find(result => result.error);
-  if (failed) throw failed.error;
+export async function saveStaffOrder({ organizationId, staffIds }) {
+  const { data, error } = await requireClient().rpc('timefit_user_reorder_staff', { p_organization_id: organizationId, p_staff_ids: staffIds });
+  if (error) throw error;
+  if (Number(data) !== staffIds.length) throw new Error('staff_order_incomplete');
+  return data;
 }
 
 export async function saveWorkSchedule({ organizationId, staffId, workDate, startsAt, endsAt, shiftName, breakMinutes = 0, breakStartsAt = null, breakEndsAt = null }) {
