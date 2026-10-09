@@ -2,11 +2,24 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 const supabaseUrl = String.fromEnvironment('SUPABASE_URL');
 const supabasePublishableKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+const mobileAppUrl = String.fromEnvironment(
+  'MOBILE_APP_URL',
+  defaultValue: 'https://timefit-mobile.vercel.app/',
+);
+
+String mobileAttendanceQrUrl(String qrToken) {
+  final base = Uri.parse(mobileAppUrl);
+  return base.replace(
+    queryParameters: {...base.queryParameters, 'qr': qrToken},
+    fragment: 'attendance',
+  ).toString();
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -66,6 +79,10 @@ class _TabletShellState extends State<TabletShell> {
   String? employee;
   String? action;
   String? attendanceStaffId;
+  String? qrToken;
+  String? qrOrganizationName;
+  String? qrError;
+  bool qrLoading = false;
   String leaveType = '연차';
   @override
   void initState() {
@@ -107,6 +124,10 @@ class _TabletShellState extends State<TabletShell> {
       employee = null;
       action = null;
       attendanceStaffId = null;
+      qrToken = null;
+      qrOrganizationName = null;
+      qrError = null;
+      qrLoading = false;
       attendancePhone.clear();
       attendancePhoneLast8.clear();
       leavePhone.clear();
@@ -115,6 +136,53 @@ class _TabletShellState extends State<TabletShell> {
       password.clear();
       notice = '관리자 로그아웃이 완료됐어요. 다른 사업장으로 다시 연결할 수 있어요.';
     });
+  }
+
+  Future<void> _selectMode(String nextMode) async {
+    setState(() => mode = nextMode);
+    if (nextMode == 'qr' && qrToken == null && !qrLoading) {
+      await _loadAttendanceQr();
+    }
+  }
+
+  Future<void> _loadAttendanceQr() async {
+    if (token == null || token!.isEmpty) return;
+    setState(() {
+      qrLoading = true;
+      qrError = null;
+    });
+    try {
+      final response = await _withNetworkRetry(() => Supabase.instance.client
+              .rpc('timefit_user_tablet_static_attendance_qr', params: {
+            'p_device_token': token,
+          }).timeout(const Duration(seconds: 12)));
+      final result = Map<String, dynamic>.from(response as Map);
+      final nextToken = result['token']?.toString();
+      if (nextToken == null || nextToken.isEmpty) {
+        throw Exception('qr_token_missing');
+      }
+      if (!mounted) return;
+      setState(() {
+        qrToken = nextToken;
+        qrOrganizationName = result['organizationName']?.toString();
+      });
+    } on TimeoutException {
+      if (mounted) {
+        setState(() => qrError = 'QR을 불러오는 시간이 초과됐어요. 인터넷 연결을 확인해 주세요.');
+      }
+    } catch (error) {
+      if (!mounted) return;
+      final detail = error.toString();
+      setState(() {
+        qrError = detail.contains('tablet_device_not_active')
+            ? '태블릿 연결이 만료됐어요. 관리자 연결을 다시 진행해 주세요.'
+            : detail.contains('tablet_access_denied')
+                ? '관리자가 태블릿 사용을 활성화해 주세요.'
+                : '업장 QR을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.';
+      });
+    } finally {
+      if (mounted) setState(() => qrLoading = false);
+    }
   }
 
   Future<void> _activate() async {
@@ -985,7 +1053,12 @@ class _TabletShellState extends State<TabletShell> {
               style: TextStyle(
                   color: Colors.white70, fontWeight: FontWeight.bold)),
           const SizedBox(height: 14),
-          Text(mode == 'attendance' ? '빠르고 정확한\n직원 출퇴근' : '간편한\n휴가 신청',
+          Text(
+              mode == 'attendance'
+                  ? '빠르고 정확한\n직원 출퇴근'
+                  : mode == 'leave'
+                      ? '간편한\n휴가 신청'
+                      : '휴대폰으로\nQR 출퇴근',
               style: const TextStyle(
                   color: Colors.white,
                   fontSize: 38,
@@ -1041,7 +1114,7 @@ class _TabletShellState extends State<TabletShell> {
                               Expanded(
                                   child: FilledButton(
                                       onPressed: () =>
-                                          setState(() => mode = 'attendance'),
+                                          _selectMode('attendance'),
                                       style: FilledButton.styleFrom(
                                           elevation: 0,
                                           backgroundColor: mode == 'attendance'
@@ -1051,12 +1124,20 @@ class _TabletShellState extends State<TabletShell> {
                                               ? const Color(0xff3182f6)
                                               : const Color(0xff6b7684),
                                           minimumSize: const Size(0, 60)),
-                                      child: const Text('◷  출퇴근'))),
+                                      child: const FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(Icons.schedule_rounded,
+                                                    size: 20),
+                                                SizedBox(width: 7),
+                                                Text('출퇴근')
+                                              ])))),
                               const SizedBox(width: 6),
                               Expanded(
                                   child: FilledButton(
-                                      onPressed: () =>
-                                          setState(() => mode = 'leave'),
+                                      onPressed: () => _selectMode('leave'),
                                       style: FilledButton.styleFrom(
                                           elevation: 0,
                                           backgroundColor: mode == 'leave'
@@ -1066,7 +1147,39 @@ class _TabletShellState extends State<TabletShell> {
                                               ? const Color(0xff3182f6)
                                               : const Color(0xff6b7684),
                                           minimumSize: const Size(0, 60)),
-                                      child: const Text('▣  휴가 신청')))
+                                      child: const FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(Icons.event_note_rounded,
+                                                    size: 20),
+                                                SizedBox(width: 7),
+                                                Text('휴가 신청')
+                                              ])))),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                  child: FilledButton(
+                                      onPressed: () => _selectMode('qr'),
+                                      style: FilledButton.styleFrom(
+                                          elevation: 0,
+                                          backgroundColor: mode == 'qr'
+                                              ? Colors.white
+                                              : Colors.transparent,
+                                          foregroundColor: mode == 'qr'
+                                              ? const Color(0xff3182f6)
+                                              : const Color(0xff6b7684),
+                                          minimumSize: const Size(0, 60)),
+                                      child: const FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(Icons.qr_code_2_rounded,
+                                                    size: 20),
+                                                SizedBox(width: 7),
+                                                Text('출퇴근 QR')
+                                              ]))))
                             ])),
                         const SizedBox(height: 38),
                         Container(
@@ -1082,9 +1195,12 @@ class _TabletShellState extends State<TabletShell> {
                                       blurRadius: 26,
                                       offset: Offset(0, 12))
                                 ]),
-                            child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: children)),
+                            child: mode == 'qr'
+                                ? _attendanceQrPanel()
+                                : Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: children)),
                       ]),
                 )))
               ]),
@@ -1093,6 +1209,128 @@ class _TabletShellState extends State<TabletShell> {
         ),
         if (notice != null) _noticeOverlay(),
       ]),
+    );
+  }
+
+  Widget _attendanceQrPanel() {
+    if (qrLoading && qrToken == null) {
+      return const SizedBox(
+        height: 420,
+        child: Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 18),
+            Text('업장 고정 QR을 불러오고 있어요',
+                style: TextStyle(
+                    color: Color(0xff6b7684), fontWeight: FontWeight.w700)),
+          ]),
+        ),
+      );
+    }
+    if (qrError != null && qrToken == null) {
+      return SizedBox(
+        height: 420,
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.qr_code_2_rounded,
+                  size: 72, color: Color(0xff8b95a1)),
+              const SizedBox(height: 18),
+              Text(qrError!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      color: Color(0xff6b7684), fontSize: 16, height: 1.5)),
+              const SizedBox(height: 22),
+              FilledButton.icon(
+                onPressed: qrLoading ? null : _loadAttendanceQr,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('다시 불러오기'),
+              ),
+            ]),
+          ),
+        ),
+      );
+    }
+    if (qrToken == null) return const SizedBox(height: 420);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Semantics(
+          label: '${qrOrganizationName ?? '현재 업장'} 출퇴근 QR 코드',
+          image: true,
+          child: Container(
+            width: 330,
+            height: 330,
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: const Color(0xffdfe5ec)),
+            ),
+            child: QrImageView(
+              data: mobileAttendanceQrUrl(qrToken!),
+              version: QrVersions.auto,
+              errorCorrectionLevel: QrErrorCorrectLevel.H,
+              backgroundColor: Colors.white,
+            ),
+          ),
+        ),
+        const SizedBox(width: 32),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('고정 업장 QR',
+                  style: TextStyle(
+                      color: Color(0xff3182f6), fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              Text('${qrOrganizationName ?? '현재 업장'} 출퇴근',
+                  style: const TextStyle(
+                      color: Color(0xff191f28),
+                      fontSize: 27,
+                      fontWeight: FontWeight.w800)),
+              const SizedBox(height: 14),
+              const Text(
+                '직원 휴대폰에서 TimeFit 앱의 QR 출퇴근을 열고 이 코드를 스캔해 주세요.',
+                style: TextStyle(
+                    color: Color(0xff4e5968), fontSize: 16, height: 1.55),
+              ),
+              const SizedBox(height: 18),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xffe8f8f0),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.lock_rounded, size: 18, color: Color(0xff15915c)),
+                  SizedBox(width: 8),
+                  Flexible(
+                    child: Text('한 번 발급된 QR은 자동으로 바뀌지 않아요',
+                        style: TextStyle(
+                            color: Color(0xff15915c),
+                            fontWeight: FontWeight.w700)),
+                  ),
+                ]),
+              ),
+              const SizedBox(height: 18),
+              TextButton.icon(
+                onPressed: qrLoading ? null : _loadAttendanceQr,
+                icon: qrLoading
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.refresh_rounded),
+                label: const Text('같은 QR 다시 불러오기'),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
