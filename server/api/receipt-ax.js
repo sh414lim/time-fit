@@ -1,4 +1,4 @@
-import { authorizeFinance, authorizeOrganizationMember, financeError, financeRest, financeServerConfigured, methodNotAllowed } from './_finance-server.js';
+import { authorizeFinance, authorizeOrganizationMember, canAccessFinanceCostCenter, financeError, financeRest, financeServerConfigured, methodNotAllowed } from './_finance-server.js';
 import { extractReceiptWithTimefitAx, normalizedRequestId } from './_timefit-ax.js';
 
 export { axBaseUrl, axTimeout, normalizeImageUrls, normalizedRequestId } from './_timefit-ax.js';
@@ -8,7 +8,9 @@ const FINAL_REVIEW_STATES = new Set(['approved', 'rejected', 'withdrawn']);
 async function authorizeDocument(req, document) {
   const member = await authorizeOrganizationMember(req, document.organization_id);
   if (member?.user?.id === document.uploaded_by) return member;
-  return authorizeFinance(req, document.organization_id, { permissionsAny: ['expense.receipt.review', 'expense.manage'] });
+  const manager = await authorizeFinance(req, document.organization_id, { permissionsAny: ['expense.receipt.review', 'expense.manage'] });
+  if (!manager || !await canAccessFinanceCostCenter(manager, document.organization_id, document.cost_center_id)) return null;
+  return manager;
 }
 
 export default async function handler(req, res) {
@@ -24,7 +26,7 @@ export default async function handler(req, res) {
   let authorized = false;
   try {
     const requestId = normalizedRequestId(req.body?.requestId, documentId);
-    const documents = await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}&organization_id=eq.${encodeURIComponent(organizationId)}&document_type=eq.receipt&select=id,organization_id,uploaded_by,extracted_data,storage_path,mime_type,processing_status,review_status`);
+    const documents = await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}&organization_id=eq.${encodeURIComponent(organizationId)}&document_type=eq.receipt&select=id,organization_id,uploaded_by,cost_center_id,extracted_data,storage_path,mime_type,processing_status,review_status`);
     document = documents[0];
     if (!document) return res.status(404).json({ ok: false, error: '영수증 문서를 찾을 수 없습니다.' });
     const auth = await authorizeDocument(req, document);

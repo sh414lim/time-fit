@@ -116,3 +116,32 @@ test('승인 또는 종료된 영수증은 재분석하지 않는다', async t =
   } }, res);
   assert.equal(res.statusCode, 409);
 });
+
+test('위임 관리자는 허용된 비용센터 밖의 영수증을 분석할 수 없다', async t => {
+  configure();
+  let axRequested = false;
+  t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+    const value = String(url);
+    if (value.includes('/auth/v1/user')) return jsonResponse({ id: 'manager-1' });
+    if (value.includes('/timefit_user_finance_documents?') && (!options.method || options.method === 'GET')) {
+      return jsonResponse([{ id: 'doc-1', organization_id: 'org-1', uploaded_by: 'employee-1', cost_center_id: 'center-2', extracted_data: null, storage_path: 'org-1/doc-1.jpg', mime_type: 'image/jpeg', review_status: 'submitted' }]);
+    }
+    if (value.includes('/timefit_user_organizations?')) return jsonResponse([{ id: 'org-1', owner_id: 'owner-1' }]);
+    if (value.includes('/timefit_user_memberships?')) return jsonResponse([{ organization_id: 'org-1', role: 'manager' }]);
+    if (value.includes('/timefit_user_management_accounts?')) return jsonResponse([{ id: 'account-1' }]);
+    if (value.includes('/timefit_user_management_permissions?')) return jsonResponse([{ permission_code: 'expense.receipt.review' }]);
+    if (value.includes('/timefit_user_management_cost_center_scopes?')) return jsonResponse([{ cost_center_id: 'center-1' }]);
+    if (value.includes('/timefit_user_cost_centers?')) return jsonResponse([{ id: 'center-2', parent_id: null }]);
+    if (value === 'https://ax.example.com/api/timefit/v1/receipt-sessions') {
+      axRequested = true;
+      return jsonResponse({ state: 'SUCCEEDED', extraction: {} });
+    }
+    throw new Error(`unexpected_fetch:${value}`);
+  });
+  const res = responseRecorder();
+  await handler({ method: 'POST', headers: { authorization: 'Bearer manager-token' }, body: {
+    organizationId: 'org-1', documentId: 'doc-1', requestId: 'receipt:doc-1:scoped',
+  } }, res);
+  assert.equal(res.statusCode, 403);
+  assert.equal(axRequested, false);
+});
