@@ -536,14 +536,16 @@ export async function createReceiptSubmission({ organizationId, files, costCente
 }
 export async function uploadReceiptToGoogleDrive({ organizationId, file }) {
   if (!organizationId || !file?.size) throw new Error('영수증 파일을 선택해 주세요.');
+  const client = requireClient();
   const body = new FormData(); body.set('organizationId', organizationId); body.set('file', file, file.name);
-  const { data, error } = await requireClient().functions.invoke('upload-receipt-drive', { body });
+  const { data, error } = await client.functions.invoke('upload-receipt-drive', { body });
   if (error) {
     const detail = await error.context?.json?.().catch(() => null);
     throw new Error(detail?.error || error.message || 'Google Drive 업로드에 실패했습니다.');
   }
   if (!data?.file?.webViewLink) throw new Error('Google Drive 파일 URL을 받지 못했습니다.');
-  const uploaded = { ...data.file, createdAt: data.file.createdTime || new Date().toISOString() };
+  const userId = (await client.auth.getUser()).data.user?.id || null;
+  const uploaded = { ...data.file, uploadedBy: userId, createdAt: data.file.createdTime || new Date().toISOString() };
   if (typeof window !== 'undefined') {
     const key = `timefit:drive-receipts:${organizationId}`;
     let current = [];
@@ -552,9 +554,14 @@ export async function uploadReceiptToGoogleDrive({ organizationId, file }) {
   }
   return uploaded;
 }
-export async function loadDriveReceiptUploads(organizationId) {
+export async function loadDriveReceiptUploads(organizationId, { currentUserOnly = false } = {}) {
   if (!organizationId || typeof window === 'undefined') return [];
-  try { return JSON.parse(window.localStorage.getItem(`timefit:drive-receipts:${organizationId}`) || '[]'); }
+  try {
+    const uploads = JSON.parse(window.localStorage.getItem(`timefit:drive-receipts:${organizationId}`) || '[]');
+    if (!currentUserOnly) return uploads;
+    const userId = (await requireClient().auth.getUser()).data.user?.id;
+    return userId ? uploads.filter(item => item.uploadedBy === userId) : [];
+  }
   catch { return []; }
 }
 export async function loadMyReceiptDocuments(organizationId) {
