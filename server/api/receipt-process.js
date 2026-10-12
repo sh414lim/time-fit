@@ -291,18 +291,26 @@ async function enqueueRun({ organizationId, documentId, userId }) {
   if (active.length) {
     if (isReceiptRunStale(active[0]) && Number(active[0].attempt_count || 0) < 5) {
       await financeRest(`timefit_user_expense_processing_runs?id=eq.${encodeURIComponent(active[0].id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'queued', error_code: 'stale_run_recovered', finished_at: null }) });
-      scheduleBackground(() => processReceiptRun({ organizationId, documentId, runId: active[0].id }));
-      return { run: { ...active[0], status: 'queued' }, duplicateRequest: false, recovered: true };
+      return { run: { ...active[0], status: 'queued' }, duplicateRequest: false, recovered: true, shouldProcess: true };
     }
-    return { run: active[0], duplicateRequest: true };
+    return { run: active[0], duplicateRequest: true, shouldProcess: active[0].status === 'queued' };
   }
   const recent = await financeRest(`timefit_user_expense_processing_runs?document_id=eq.${encodeURIComponent(documentId)}&select=id&order=created_at.desc&limit=5`);
   if (recent.length >= 5) throw new Error('receipt_retry_limit');
   const rows = await financeRest('timefit_user_expense_processing_runs', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify([{ organization_id: organizationId, document_id: documentId, status: 'queued', ocr_provider: 'google_vision', ocr_model: 'DOCUMENT_TEXT_DETECTION', extractor_version: 'receipt-v2', created_by: userId }]) });
   const run = rows[0];
   await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ processing_status: 'queued', processing_error: null }) });
-  scheduleBackground(() => processReceiptRun({ organizationId, documentId, runId: run.id }));
-  return { run, duplicateRequest: false };
+  return { run, duplicateRequest: false, shouldProcess: true };
+}
+
+async function dispatchReceiptRun({ organizationId, documentId, queued }) {
+  if (!queued.shouldProcess) return;
+  const task = () => processReceiptRun({ organizationId, documentId, runId: queued.run.id });
+  // `after()` does not reliably retain work scheduled from a Pages API catch-all
+  // on Vercel. Await the bounded AX request there so a successful 202 never leaves
+  // the run permanently queued. Local development keeps the non-blocking behavior.
+  if (process.env.VERCEL === '1') await task();
+  else scheduleBackground(task);
 }
 
 export default async function handler(req, res) {
@@ -345,10 +353,12 @@ export default async function handler(req, res) {
       if (expenseId) await financeRest(`timefit_user_expenses?id=eq.${encodeURIComponent(expenseId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ transaction_date: transactionDate, total_amount: totalAmount, merchant_name: next.merchantName, status: 'review_required', updated_at: new Date().toISOString() }) });
       await financeRest('timefit_user_expense_audit_logs', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify([{ organization_id: organizationId, entity_type: 'finance_document', entity_id: documentId, action: 'submitter_confirmed', before_value: current, after_value: next, actor_id: auth.user.id, source: 'user' }]) });
       const queued = await enqueueRun({ organizationId, documentId, userId: auth.user.id });
+      await dispatchReceiptRun({ organizationId, documentId, queued });
       return res.status(202).json({ ok: true, documentId, runId: queued.run.id, duplicateRequest: queued.duplicateRequest });
     }
 
     const queued = await enqueueRun({ organizationId, documentId, userId: auth.user.id });
+    await dispatchReceiptRun({ organizationId, documentId, queued });
     return res.status(202).json({ ok: true, documentId, runId: queued.run.id, status: queued.run.status, duplicateRequest: queued.duplicateRequest });
   } catch (error) {
     if (error.message === 'receipt_retry_limit') return res.status(409).json({ ok: false, error: '자동 재분석 횟수를 초과했습니다. 관리자에게 확인을 요청해 주세요.' });
