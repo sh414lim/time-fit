@@ -46,3 +46,11 @@ test('Drive 업로드 링크는 페이지 이동과 새로고침 후에도 복�
   assert.match(employee, /const formElement = event\.currentTarget/);
   assert.match(employee, /const form = new FormData\(formElement\)/);
 });
+
+test('Vercel Pages API는 AX 처리를 응답 전에 완료해 작업이 queued에 남지 않는다', async () => {
+  const source = await read('server/api/receipt-process.js');
+  assert.match(source, /process\.env\.VERCEL === '1'/);
+  assert.match(source, /if \(process\.env\.VERCEL === '1'\) await task\(\)/);
+  assert.match(source, /await dispatchReceiptRun\(\{ organizationId, documentId, queued \}\)/);
+  assert.doesNotMatch(source, /scheduleBackground\(\(\) => processReceiptRun\(\{ organizationId, documentId, runId: run\.id \}\)\)/);
+});
