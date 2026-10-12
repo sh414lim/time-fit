@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import test from 'node:test';
-import { createTimefitAxServer, parseReceiptText, validateReceiptRequest } from './server.mjs';
+import { createFirestoreIdempotencyStore, createTimefitAxServer, parseReceiptText, validateReceiptRequest } from './server.mjs';
 
 const key = 'test-key-with-at-least-thirty-two-characters';
 
@@ -32,7 +32,7 @@ test('only public HTTPS receipt URLs are accepted', () => {
 });
 
 test('health endpoint is public and analysis requires the shared key', async () => withServer(async () => ({}), async base => {
-  const health = await fetch(`${base}/healthz`);
+  const health = await fetch(`${base}/health`);
   assert.equal(health.status, 200);
   assert.equal((await health.json()).service, 'timefit-ax');
   const rejected = await fetch(`${base}/api/timefit/v1/receipt-sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(validBody) });
@@ -58,3 +58,49 @@ test('a reused request ID with different input is rejected', async () => withSer
   assert.equal((await send(validBody)).status, 200);
   assert.equal((await send({ ...validBody, documentId: 'doc-2' })).status, 409);
 }));
+
+function fakeFirestore() {
+  let document = null;
+  let version = 0;
+  const response = (status, body = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  return async (url, options = {}) => {
+    const method = options.method || 'GET';
+    if (method === 'POST') {
+      if (document) return response(409, { error: { status: 'ALREADY_EXISTS' } });
+      version += 1;
+      document = { ...JSON.parse(options.body), updateTime: `2026-10-12T00:00:0${version}Z` };
+      return response(200, document);
+    }
+    if (method === 'GET') return document ? response(200, document) : response(404, {});
+    const expected = new URL(url).searchParams.get('currentDocument.updateTime');
+    if (!document || expected !== document.updateTime) return response(409, {});
+    if (method === 'DELETE') { document = null; return response(200, {}); }
+    if (method === 'PATCH') {
+      version += 1;
+      document = { fields: { ...document.fields, ...JSON.parse(options.body).fields }, updateTime: `2026-10-12T00:00:0${version}Z` };
+      return response(200, document);
+    }
+    return response(405, {});
+  };
+}
+
+test('Firestore idempotency is shared, caches success, and rejects conflicts', async () => {
+  const store = createFirestoreIdempotencyStore({ tokenProvider: async () => 'token', fetchImpl: fakeFirestore(), now: () => Date.parse('2026-10-12T00:00:00Z') });
+  const input = { requestId: 'receipt:firestore:shared', fingerprint: 'fingerprint-a' };
+  const first = await store.claim(input);
+  assert.equal(first.state, 'claimed');
+  assert.equal((await store.claim(input)).state, 'pending');
+  const payload = { requestId: input.requestId, state: 'SUCCEEDED', extraction: { totalAmount: 12300 } };
+  await store.complete({ ...input, ...first, payload });
+  assert.deepEqual(await store.claim(input), { state: 'cached', payload });
+  assert.equal((await store.claim({ ...input, fingerprint: 'fingerprint-b' })).state, 'conflict');
+});
+
+test('Firestore idempotency recovers an expired pending lease', async () => {
+  let clock = Date.parse('2026-10-12T00:00:00Z');
+  const store = createFirestoreIdempotencyStore({ tokenProvider: async () => 'token', fetchImpl: fakeFirestore(), now: () => clock });
+  const input = { requestId: 'receipt:firestore:stale', fingerprint: 'fingerprint-a' };
+  assert.equal((await store.claim(input)).state, 'claimed');
+  clock += 3 * 60 * 1000;
+  assert.equal((await store.claim(input)).state, 'claimed');
+});
