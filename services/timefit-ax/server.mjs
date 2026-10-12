@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import dns from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
@@ -9,6 +9,9 @@ const MAX_BODY_BYTES = 64 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGES = 20;
 const MAX_CACHE_ENTRIES = 500;
+const IDEMPOTENCY_COLLECTION = 'timefit_ax_idempotency';
+const IDEMPOTENCY_LEASE_MS = 2 * 60 * 1000;
+const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const REQUEST_ID = /^[A-Za-z0-9:_-]{8,200}$/;
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/tiff', 'application/pdf']);
 
@@ -115,13 +118,17 @@ export async function downloadImage(value) {
   });
 }
 
+let accessTokenCache = null;
+
 async function metadataAccessToken() {
+  if (accessTokenCache?.expiresAt > Date.now() + 60_000) return accessTokenCache.value;
   const response = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token', {
     headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(5_000),
   });
   if (!response.ok) throw Object.assign(new Error('google_auth_unavailable'), { status: 503 });
   const body = await response.json();
   if (!body.access_token) throw Object.assign(new Error('google_auth_unavailable'), { status: 503 });
+  accessTokenCache = { value: body.access_token, expiresAt: Date.now() + Math.max(60, Number(body.expires_in || 300)) * 1000 };
   return body.access_token;
 }
 
@@ -186,35 +193,151 @@ export async function analyzeReceiptImages(imageUrls) {
   };
 }
 
-export function createTimefitAxServer({ transportKey = process.env.TIMEFIT_AX_TRANSPORT_KEY, analyzeImages = analyzeReceiptImages } = {}) {
-  if (!transportKey || transportKey.length < 32) throw new Error('TIMEFIT_AX_TRANSPORT_KEY must contain at least 32 characters');
+export function createMemoryIdempotencyStore() {
   const cache = new Map();
   const pending = new Map();
   const remember = (key, value) => {
     cache.set(key, value);
     if (cache.size > MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value);
   };
+  return {
+    async claim({ requestId, fingerprint }) {
+      const known = cache.get(requestId);
+      if (known?.fingerprint !== undefined && known.fingerprint !== fingerprint) return { state: 'conflict' };
+      if (known) return { state: 'cached', payload: known.payload };
+      if (pending.has(requestId)) return { state: 'pending' };
+      const owner = randomUUID();
+      pending.set(requestId, { fingerprint, owner });
+      return { state: 'claimed', owner };
+    },
+    async complete({ requestId, fingerprint, owner, payload }) {
+      const active = pending.get(requestId);
+      if (!active || active.fingerprint !== fingerprint || active.owner !== owner) throw Object.assign(new Error('idempotency_claim_lost'), { status: 503 });
+      remember(requestId, { fingerprint, payload });
+      pending.delete(requestId);
+    },
+    async release({ requestId, owner }) {
+      if (pending.get(requestId)?.owner === owner) pending.delete(requestId);
+    },
+  };
+}
+
+const firestoreValue = (fields, name) => {
+  const value = fields?.[name];
+  return value?.stringValue ?? value?.timestampValue ?? null;
+};
+
+export function createFirestoreIdempotencyStore({
+  projectId = process.env.GOOGLE_CLOUD_PROJECT || 'team-bro',
+  tokenProvider = metadataAccessToken,
+  fetchImpl = fetch,
+  now = () => Date.now(),
+} = {}) {
+  const documentsUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/(default)/documents/${IDEMPOTENCY_COLLECTION}`;
+  const call = async (url, options = {}) => {
+    const token = await tokenProvider();
+    const response = await fetchImpl(url, {
+      ...options,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(options.headers || {}) },
+      signal: options.signal || AbortSignal.timeout(8_000),
+    });
+    const text = await response.text();
+    let body = {};
+    try { body = text ? JSON.parse(text) : {}; } catch { body = {}; }
+    return { response, body };
+  };
+  const unavailable = code => Object.assign(new Error(code), { status: 503 });
+  const documentUrl = requestId => `${documentsUrl}/${createHash('sha256').update(requestId).digest('hex')}`;
+  const pendingDocument = ({ requestId, fingerprint, owner }) => ({
+    fields: {
+      requestId: { stringValue: requestId }, fingerprint: { stringValue: fingerprint }, owner: { stringValue: owner }, state: { stringValue: 'PENDING' },
+      leaseExpiresAt: { timestampValue: new Date(now() + IDEMPOTENCY_LEASE_MS).toISOString() },
+      expireAt: { timestampValue: new Date(now() + IDEMPOTENCY_TTL_MS).toISOString() },
+    },
+  });
+
+  const claim = async ({ requestId, fingerprint }, retry = true) => {
+    const owner = randomUUID();
+    const id = createHash('sha256').update(requestId).digest('hex');
+    const created = await call(`${documentsUrl}?documentId=${id}`, { method: 'POST', body: JSON.stringify(pendingDocument({ requestId, fingerprint, owner })) });
+    if (created.response.status === 200) return { state: 'claimed', owner, updateTime: created.body.updateTime };
+    if (created.response.status !== 409) throw unavailable(`idempotency_store_create_${created.response.status}`);
+
+    const existing = await call(documentUrl(requestId));
+    if (!existing.response.ok) throw unavailable(`idempotency_store_read_${existing.response.status}`);
+    const fields = existing.body.fields || {};
+    if (firestoreValue(fields, 'fingerprint') !== fingerprint) return { state: 'conflict' };
+    const state = firestoreValue(fields, 'state');
+    if (state === 'SUCCEEDED') {
+      try { return { state: 'cached', payload: JSON.parse(firestoreValue(fields, 'payloadJson') || '') }; }
+      catch { throw unavailable('idempotency_store_payload_invalid'); }
+    }
+    const leaseExpiresAt = Date.parse(firestoreValue(fields, 'leaseExpiresAt') || '');
+    if (state === 'PENDING' && Number.isFinite(leaseExpiresAt) && leaseExpiresAt > now()) return { state: 'pending' };
+    if (!retry || !existing.body.updateTime) throw unavailable('idempotency_store_stale_claim');
+
+    const removed = await call(`${documentUrl(requestId)}?currentDocument.updateTime=${encodeURIComponent(existing.body.updateTime)}`, { method: 'DELETE' });
+    if (![200, 404].includes(removed.response.status)) return { state: 'pending' };
+    return claim({ requestId, fingerprint }, false);
+  };
+
+  return {
+    claim,
+    async complete({ requestId, owner, updateTime, payload }) {
+      const query = new URLSearchParams();
+      for (const field of ['state', 'payloadJson', 'expireAt']) query.append('updateMask.fieldPaths', field);
+      query.set('currentDocument.updateTime', updateTime);
+      const completed = await call(`${documentUrl(requestId)}?${query}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ fields: {
+          state: { stringValue: 'SUCCEEDED' }, payloadJson: { stringValue: JSON.stringify(payload) },
+          expireAt: { timestampValue: new Date(now() + IDEMPOTENCY_TTL_MS).toISOString() },
+        } }),
+      });
+      if (!completed.response.ok || firestoreValue(completed.body.fields, 'state') !== 'SUCCEEDED') throw unavailable(`idempotency_store_complete_${completed.response.status}`);
+      if (firestoreValue(completed.body.fields, 'payloadJson') !== JSON.stringify(payload)) throw unavailable('idempotency_store_complete_invalid');
+      if (firestoreValue(completed.body.fields, 'owner') && firestoreValue(completed.body.fields, 'owner') !== owner) throw unavailable('idempotency_claim_lost');
+    },
+    async release({ requestId, updateTime }) {
+      if (!updateTime) return;
+      const removed = await call(`${documentUrl(requestId)}?currentDocument.updateTime=${encodeURIComponent(updateTime)}`, { method: 'DELETE' });
+      if (![200, 404, 409].includes(removed.response.status)) throw unavailable(`idempotency_store_release_${removed.response.status}`);
+    },
+  };
+}
+
+function defaultIdempotencyStore() {
+  return process.env.TIMEFIT_AX_IDEMPOTENCY_BACKEND === 'firestore' ? createFirestoreIdempotencyStore() : createMemoryIdempotencyStore();
+}
+
+export function createTimefitAxServer({ transportKey = process.env.TIMEFIT_AX_TRANSPORT_KEY, analyzeImages = analyzeReceiptImages, idempotencyStore = defaultIdempotencyStore() } = {}) {
+  if (!transportKey || transportKey.length < 32) throw new Error('TIMEFIT_AX_TRANSPORT_KEY must contain at least 32 characters');
   return http.createServer(async (req, res) => {
-    if (req.method === 'GET' && req.url === '/healthz') return json(res, 200, { ok: true, service: 'timefit-ax', provider: 'google_cloud_vision' });
+    if (req.method === 'GET' && (req.url === '/health' || req.url === '/healthz')) return json(res, 200, { ok: true, service: 'timefit-ax', provider: 'google_cloud_vision' });
     if (req.method !== 'POST' || req.url !== '/api/timefit/v1/receipt-sessions') return json(res, 404, { state: 'FAILED', errorCode: 'not_found' });
     if (!safeEqual(req.headers['x-timefit-ax-key'], transportKey)) return json(res, 401, { state: 'FAILED', errorCode: 'unauthorized' });
+    let claim;
+    let input;
+    let fingerprint;
     try {
-      const input = validateReceiptRequest(await readBody(req));
-      const fingerprint = createHash('sha256').update(JSON.stringify(input)).digest('hex');
-      const known = cache.get(input.requestId);
-      if (known && known.fingerprint !== fingerprint) return json(res, 409, { state: 'FAILED', errorCode: 'request_id_conflict' });
-      if (known) return json(res, 200, known.payload);
-      if (pending.has(input.requestId)) return json(res, 409, { state: 'FAILED', errorCode: 'request_in_progress' });
-      const task = analyzeImages(input.imageUrls);
-      pending.set(input.requestId, task);
-      try {
-        const result = await task;
-        const payload = { requestId: input.requestId, state: 'SUCCEEDED', extraction: result.extraction, imageContentSha256: result.imageContentSha256, model: result.model };
-        remember(input.requestId, { fingerprint, payload });
-        console.info('timefit_ax_succeeded', { requestId: input.requestId, organizationId: input.organizationId, documentId: input.documentId, imageCount: input.imageUrls.length });
-        return json(res, 200, payload);
-      } finally { pending.delete(input.requestId); }
+      input = validateReceiptRequest(await readBody(req));
+      fingerprint = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+      claim = await idempotencyStore.claim({ requestId: input.requestId, fingerprint });
+      if (claim.state === 'conflict') return json(res, 409, { state: 'FAILED', errorCode: 'request_id_conflict' });
+      if (claim.state === 'cached') return json(res, 200, claim.payload);
+      if (claim.state === 'pending') return json(res, 409, { state: 'FAILED', errorCode: 'request_in_progress' });
+      if (claim.state !== 'claimed') throw Object.assign(new Error('idempotency_store_invalid'), { status: 503 });
+      const result = await analyzeImages(input.imageUrls);
+      const payload = { requestId: input.requestId, state: 'SUCCEEDED', extraction: result.extraction, imageContentSha256: result.imageContentSha256, model: result.model };
+      await idempotencyStore.complete({ requestId: input.requestId, fingerprint, owner: claim.owner, updateTime: claim.updateTime, payload });
+      console.info('timefit_ax_succeeded', { requestId: input.requestId, organizationId: input.organizationId, documentId: input.documentId, imageCount: input.imageUrls.length });
+      return json(res, 200, payload);
     } catch (error) {
+      if (claim?.state === 'claimed' && input?.requestId) {
+        await idempotencyStore.release({ requestId: input.requestId, fingerprint, owner: claim.owner, updateTime: claim.updateTime }).catch(releaseError => {
+          console.error('timefit_ax_idempotency_release_failed', { code: String(releaseError.message || 'release_failed').slice(0, 160) });
+        });
+      }
       const status = Number(error.status || 500);
       const code = String(error.message || 'analysis_failed').slice(0, 160);
       console.error('timefit_ax_failed', { status, code });
