@@ -22,6 +22,17 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('● 연결됨'), findsOneWidget);
+    expect(find.text('출퇴근'), findsOneWidget);
+    expect(find.text('휴가 신청'), findsOneWidget);
+    expect(find.text('출퇴근 QR'), findsOneWidget);
     expect(find.text('TimeFit 태블릿 연결'), findsNothing);
+  });
+
+  test('builds the mobile attendance deep link without changing the QR token',
+      () {
+    expect(
+      mobileAttendanceQrUrl('fixed-token'),
+      'https://timefit-mobile.vercel.app/?qr=fixed-token#attendance',
+    );
   });
 }
