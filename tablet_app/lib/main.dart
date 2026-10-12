@@ -1253,15 +1253,12 @@ class _TabletShellState extends State<TabletShell> {
       );
     }
     if (qrToken == null) return const SizedBox(height: 420);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Semantics(
+    Widget qrCard(double size) => Semantics(
           label: '${qrOrganizationName ?? '현재 업장'} 출퇴근 QR 코드',
           image: true,
           child: Container(
-            width: 330,
-            height: 330,
+            width: size,
+            height: size,
             padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
               color: Colors.white,
@@ -1275,62 +1272,77 @@ class _TabletShellState extends State<TabletShell> {
               backgroundColor: Colors.white,
             ),
           ),
+        );
+    final copy = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text('고정 업장 QR',
+            style: TextStyle(
+                color: Color(0xff3182f6), fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        Text('${qrOrganizationName ?? '현재 업장'} 출퇴근',
+            style: const TextStyle(
+                color: Color(0xff191f28),
+                fontSize: 27,
+                fontWeight: FontWeight.w800)),
+        const SizedBox(height: 14),
+        const Text(
+          '직원 휴대폰에서 TimeFit 앱의 QR 출퇴근을 열고 이 코드를 스캔해 주세요.',
+          style:
+              TextStyle(color: Color(0xff4e5968), fontSize: 16, height: 1.55),
         ),
-        const SizedBox(width: 32),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('고정 업장 QR',
-                  style: TextStyle(
-                      color: Color(0xff3182f6), fontWeight: FontWeight.w800)),
-              const SizedBox(height: 8),
-              Text('${qrOrganizationName ?? '현재 업장'} 출퇴근',
-                  style: const TextStyle(
-                      color: Color(0xff191f28),
-                      fontSize: 27,
-                      fontWeight: FontWeight.w800)),
-              const SizedBox(height: 14),
-              const Text(
-                '직원 휴대폰에서 TimeFit 앱의 QR 출퇴근을 열고 이 코드를 스캔해 주세요.',
-                style: TextStyle(
-                    color: Color(0xff4e5968), fontSize: 16, height: 1.55),
-              ),
-              const SizedBox(height: 18),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                decoration: BoxDecoration(
-                  color: const Color(0xffe8f8f0),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(Icons.lock_rounded, size: 18, color: Color(0xff15915c)),
-                  SizedBox(width: 8),
-                  Flexible(
-                    child: Text('한 번 발급된 QR은 자동으로 바뀌지 않아요',
-                        style: TextStyle(
-                            color: Color(0xff15915c),
-                            fontWeight: FontWeight.w700)),
-                  ),
-                ]),
-              ),
-              const SizedBox(height: 18),
-              TextButton.icon(
-                onPressed: qrLoading ? null : _loadAttendanceQr,
-                icon: qrLoading
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.refresh_rounded),
-                label: const Text('같은 QR 다시 불러오기'),
-              ),
-            ],
+        const SizedBox(height: 18),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xffe8f8f0),
+            borderRadius: BorderRadius.circular(12),
           ),
+          child: const Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.lock_rounded, size: 18, color: Color(0xff15915c)),
+            SizedBox(width: 8),
+            Flexible(
+              child: Text('한 번 발급된 QR은 자동으로 바뀌지 않아요',
+                  style: TextStyle(
+                      color: Color(0xff15915c), fontWeight: FontWeight.w700)),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 18),
+        TextButton.icon(
+          onPressed: qrLoading ? null : _loadAttendanceQr,
+          icon: qrLoading
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.refresh_rounded),
+          label: const Text('같은 QR 다시 불러오기'),
         ),
       ],
     );
+    return LayoutBuilder(builder: (context, constraints) {
+      final compact = constraints.maxWidth < 640;
+      if (compact) {
+        final qrSize = constraints.maxWidth.clamp(220.0, 300.0);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(child: qrCard(qrSize)),
+            const SizedBox(height: 28),
+            copy,
+          ],
+        );
+      }
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          qrCard(330),
+          const SizedBox(width: 32),
+          Expanded(child: copy),
+        ],
+      );
+    });
   }
 }

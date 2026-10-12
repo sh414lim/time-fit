@@ -21,4 +21,6 @@ test('tablet UI exposes a QR tab using the same mobile deep link contract', () =
   assert.match(app, /https:\/\/timefit-mobile\.vercel\.app\//);
   assert.match(app, /fragment:\s*'attendance'/);
   assert.match(app, /한 번 발급된 QR은 자동으로 바뀌지 않아요/);
+  assert.match(app, /constraints\.maxWidth < 640/);
+  assert.match(app, /Center\(child: qrCard\(qrSize\)\)/);
 });
