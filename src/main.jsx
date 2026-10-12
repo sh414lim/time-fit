@@ -14,11 +14,15 @@ import { invalidateViewCache, readViewCache, writeViewCache } from './lib/viewCa
 import { groupStaffByType } from './lib/staffGrouping';
 import { hasCurrentManagementPermission, managementActionErrorMessage, MANAGEMENT_ACCESS_CHANGED_MESSAGE } from './lib/managementAccess';
 import CardConnectionWizard from './features/finance/CardConnectionWizard';
+import ExpenseReviewQueue from './features/finance/ExpenseReviewQueue';
 import FinanceReportDashboard from './features/finance/FinanceReportDashboard';
 import ExpenseExceptionInbox from './features/finance/ExpenseExceptionInbox';
 import EmployeeReceiptSubmission from './features/finance/EmployeeReceiptSubmission';
+import ExpenseReminderSettings from './features/finance/ExpenseReminderSettings';
 import ExpenseLedger from './features/finance/ExpenseLedger';
 import ManualExpenseForm from './features/finance/ManualExpenseForm';
+import { prepareReceiptFiles } from './features/finance/receiptQuality';
+import { createReceiptSubmission, processReceiptDocument } from './lib/supabase';
 import { acceptEmployeeInvitation, activateTabletDevice, archiveCostCenter, bootstrapTossPlaceConnection, createCorporateCard, createFeedbackItem, createLeaveRequest, createManagementAccount, createManualStaff, createMeetingNote, deleteFinanceDocument, deleteStaffCategory, deleteWorkSchedule, disconnectCorporateCard, ensureManagerOrganization, getAuthContext, getCachedOrganizationSalesDashboard, getManagerTabletOrganization, getOrganizationSettings, getStaticAttendanceQr, getTabletDeviceContext, getTossPlaceConnection, grantStaffLeave, importCardTransactions, importFeedbackItems, inviteEmployeeByCode, isAuthSessionError, loadCardTransactions, loadCorporateCards, loadCostCenters, loadDriveReceiptUploads, loadFeedbackItems, loadFinanceDocuments, loadManagementAccounts, loadMeetingNotes, loadOperationalAlerts, loadOrganizationSalesDashboard, loadPayrollWorkspace, loadStaffCategories, loadStaffSensitiveProfile, loadTabletDevices, loadWorkforce, manageManagementAccount, markOperationalAlertRead, openFinanceDocument, previewTabletLeaveRequest, recordQrAttendance, reviewLeaveRequest, reviewWorkSchedule, revokeTabletDevice, runMonthEndOperations, saveCostCenter, saveCustomTossPlaceCredentials, saveOrganizationSettings, savePayrollContract, savePayrollDraft, saveStaffCategory, saveStaffOrder, saveStaffSensitiveProfile, saveTossPlaceConnection, saveWorkSchedule, saveWorkSchedulesBulk, sendSettlementEmail, signIn, signOut, signUp, supabase, syncOrganizationSales, tabletAttendance, tabletLeaveRequest, updateCorporateCard, updateFeedbackItem, updateStaffPhone, updateStaffProfile, uploadFinanceDocument, uploadReceiptToGoogleDrive, uploadStaffAvatar } from './lib/supabase';
 
 const KOREAN_WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -5503,82 +5507,120 @@ function SalesAnalytics({
 const EXPENSE_SECTIONS = [
   ["overview", "현황"],
   ["ledger", "지출 원장"],
+  ["evidence", "증빙 검토"],
   ["cards", "법인카드"],
   ["settlement", "결산·문서"],
 ];
 
-function ManagerReceiptUpload({ organizationId, onClose }) {
+function ManagerReceiptUpload({ organizationId, onClose, onProcessed, onOpenReview }) {
+  const [centers, setCenters] = useState([]);
   const [files, setFiles] = useState([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [uploadedFiles, setUploadedFiles] = useState([]);
-  const selectFiles = (event) => {
-    const selected = Array.from(event.target.files || []).slice(0, 20);
-    setFiles(selected);
-    setUploadedFiles([]);
-    setMessage(
-      selected.length
-        ? `${selected.length}개 원본 파일을 Google Drive에 저장할 준비가 됐어요.`
-        : "",
-    );
+  const [driveFiles, setDriveFiles] = useState([]);
+  const [result, setResult] = useState(null);
+  const selectFiles = async (event) => {
+    try {
+      const selected = await prepareReceiptFiles(event.target.files);
+      setFiles(selected);
+      setResult(null);
+      setMessage(selected.length ? `${selected.length}장 분석 준비가 됐어요.` : "");
+    } catch (error) {
+      setFiles([]);
+      setMessage(error.message || "영수증 사진을 준비하지 못했습니다.");
+    }
   };
   useEffect(() => {
     if (!organizationId) return;
-    loadDriveReceiptUploads(organizationId)
-      .then(setUploadedFiles)
-      .catch((error) =>
-        setMessage(
-          error.message || "저장된 영수증 목록을 불러오지 못했습니다.",
-        ),
-      );
+    Promise.all([loadCostCenters(organizationId), loadDriveReceiptUploads(organizationId)])
+      .then(([nextCenters, nextDriveFiles]) => {
+        setCenters(nextCenters);
+        setDriveFiles(nextDriveFiles);
+      })
+      .catch((error) => setMessage(error.message || "영수증 등록 정보를 불러오지 못했습니다."));
   }, [organizationId]);
   const submit = async (event) => {
     event.preventDefault();
-    if (!files.length) return setMessage("영수증 파일을 선택해 주세요.");
+    if (!files.length) return setMessage("영수증 사진을 선택해 주세요.");
+    const form = new FormData(event.currentTarget);
+    const selectedFiles = [...files];
     setBusy(true);
-    setMessage("Google Drive에 원본을 저장하고 있어요.");
+    setMessage("금융 원본을 저장하고 분석 작업을 요청하고 있어요.");
+    let document;
     try {
-      const uploaded = [];
-      for (const file of files)
-        uploaded.push(
-          await uploadReceiptToGoogleDrive({ organizationId, file }),
-        );
-      setUploadedFiles((current) => [...uploaded, ...current]);
+      document = await createReceiptSubmission({
+        organizationId,
+        files: selectedFiles,
+        costCenterId: form.get("costCenterId"),
+        paymentMethod: form.get("paymentMethod"),
+        submissionReason: String(form.get("reason") || "").trim(),
+        source: "manager_web",
+      });
+      let processingStarted = true;
+      try {
+        await processReceiptDocument({ organizationId, documentId: document.id });
+      } catch {
+        processingStarted = false;
+      }
+      const archiveResults = await Promise.allSettled(selectedFiles.map((file) => uploadReceiptToGoogleDrive({ organizationId, file })));
+      const archived = archiveResults.filter((item) => item.status === "fulfilled").map((item) => item.value);
+      const archiveFailed = archiveResults.length - archived.length;
+      setDriveFiles((current) => [...archived, ...current.filter((item) => !archived.some((next) => next.id === item.id))]);
+      setResult({ documentId: document.id, archived, archiveFailed, processingStarted });
       setFiles([]);
-      setMessage(
-        "원본 저장이 완료됐습니다. 아래 링크에서 파일을 확인할 수 있어요.",
-      );
+      setMessage(!processingStarted
+        ? `금융 원본과 Drive 백업은 저장됐지만 분석 요청을 시작하지 못했습니다. 검토함에서 다시 분석해 주세요. (${document.id})`
+        : archiveFailed
+          ? `분석 처리를 시작했습니다. Drive 백업 ${archiveFailed}개는 실패했지만 금융 원본은 안전하게 저장됐습니다.`
+          : "분석, 지출 생성, 카드 대조 및 검토함 등록을 시작했습니다.");
+      onProcessed?.(document.id);
     } catch (error) {
-      setMessage(
-        error.message || "Google Drive에 영수증을 업로드하지 못했습니다.",
-      );
+      if (document) {
+        setResult({ documentId: document.id, archived: [], archiveFailed: 0, processingStarted: false });
+        setMessage(`금융 원본은 저장됐지만 분석 요청을 시작하지 못했습니다. 검토함에서 다시 분석해 주세요. (${document.id})`);
+        onProcessed?.(document.id);
+      } else {
+        setMessage(error.message || "영수증을 등록하지 못했습니다.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+  const retry = async () => {
+    if (!result?.documentId) return;
+    setBusy(true);
+    setMessage("분석 작업을 다시 요청하고 있어요.");
+    try {
+      await processReceiptDocument({ organizationId, documentId: result.documentId });
+      setResult((current) => ({ ...current, processingStarted: true }));
+      setMessage("분석 작업을 다시 요청했습니다. 검토함에서 처리 상태를 확인해 주세요.");
+      onProcessed?.(result.documentId);
+    } catch (error) {
+      setMessage(error.message || "분석 작업을 다시 요청하지 못했습니다.");
     } finally {
       setBusy(false);
     }
   };
   return (
     <Modal
-      title="영수증 원본 업로드"
+      title="영수증 업로드"
       onClose={busy ? undefined : onClose}
       variant="manager-receipt-modal"
     >
       <p className="modal-text">
-        선택한 원본 파일만 Google Drive에 저장합니다. OCR, 지출 저장, 카드 대조
-        및 검토함 등록은 현재 실행하지 않습니다.
+        원본 등록 후 Timefit AX 또는 OCR 분석, 지출 생성, 카드 대조와 검토함 등록을 자동으로 시작합니다. Google Drive에도 원본을 백업합니다.
       </p>
-      {uploadedFiles.length ? (
+      {result ? (
         <div className="manager-receipt-success" role="status">
           <span className="manager-receipt-success-icon" aria-hidden="true">
-            ✓
+            {result.processingStarted ? "✓" : "!"}
           </span>
           <div>
-            <b>Google Drive 저장 완료</b>
+            <b>{result.processingStarted ? "실제 처리 요청 완료" : "원본 등록 완료 · 분석 재시도 필요"}</b>
             <p>{message}</p>
-            <small>
-              Drive 폴더 접근 권한이 있는 계정으로 링크를 열어 주세요.
-            </small>
+            <small>문서 ID: {result.documentId}</small>
           </div>
-          {uploadedFiles.map((file, index) => (
+          {result.archived.map((file, index) => (
             <a
               key={file.id}
               className="outline"
@@ -5589,18 +5631,19 @@ function ManagerReceiptUpload({ organizationId, onClose }) {
               {index + 1}. {file.name || "영수증 원본"} 열기
             </a>
           ))}
+          {!result.processingStarted && <button type="button" className="submit" disabled={busy} onClick={retry}>{busy ? "재요청 중…" : "분석 다시 요청"}</button>}
           <button
             type="button"
             className="outline"
             onClick={() => {
-              setUploadedFiles([]);
+              setResult(null);
               setMessage("");
             }}
           >
             다른 영수증 업로드
           </button>
-          <button type="button" className="submit" onClick={onClose}>
-            완료
+          <button type="button" className="submit" onClick={onOpenReview}>
+            검토함에서 확인
           </button>
         </div>
       ) : (
@@ -5608,7 +5651,8 @@ function ManagerReceiptUpload({ organizationId, onClose }) {
           <label className="receipt-camera-input">
             <input
               type="file"
-              accept="image/*,application/pdf"
+              accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+              capture="environment"
               multiple
               onChange={selectFiles}
             />
@@ -5617,7 +5661,7 @@ function ManagerReceiptUpload({ organizationId, onClose }) {
                 ? `${files.length}개 파일 선택됨`
                 : "카메라로 촬영 또는 파일 선택"}
             </strong>
-            <span>원본 그대로 Google Drive에 저장 · 파일당 최대 20MB</span>
+            <span>장당 최대 7MB로 자동 최적화 · 최대 20장</span>
           </label>
           {files.length > 0 && (
             <div className="manager-receipt-files">
@@ -5628,9 +5672,13 @@ function ManagerReceiptUpload({ organizationId, onClose }) {
               ))}
             </div>
           )}
+          <label>부서·섹션<select name="costCenterId" required defaultValue=""><option value="">선택</option>{centers.map((center) => <option key={center.id} value={center.id}>{center.name}</option>)}</select></label>
+          <label>결제수단<select name="paymentMethod" required defaultValue="corporate_card"><option value="corporate_card">법인카드</option><option value="personal_card">개인카드</option><option value="cash">현금</option><option value="bank_transfer">계좌이체</option><option value="other">기타</option></select></label>
+          <label>지출 목적 (선택)<input name="reason" maxLength="200" placeholder="예: 주방 식자재 구입"/></label>
           {message && <p className="manager-receipt-message">{message}</p>}
-          <button className="submit" disabled={busy || !files.length}>
-            {busy ? "Drive 저장 중…" : "Google Drive에 저장"}
+          {driveFiles.length > 0 && <a className="manager-receipt-backup-link" href={driveFiles[0].webViewLink} target="_blank" rel="noreferrer">최근 Drive 백업 열기</a>}
+          <button className="submit" disabled={busy || !files.length || !centers.length}>
+            {busy ? "처리 요청 중…" : "분석 및 지출 처리 시작"}
           </button>
         </form>
       )}
@@ -5660,7 +5708,12 @@ function ExpenseWorkspace({
   }, [navigationContext?.cardReview, navigationContext?.month]);
   const fromException = (item) => {
     if (item.target === "receipts") {
-      setShowReceiptUpload(true);
+      selectSection("evidence");
+      requestAnimationFrame(() =>
+        document
+          .querySelector(".expense-review-queue")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" }),
+      );
       return;
     }
     const next = item.target === "closeouts" ? "overview" : "cards";
@@ -5695,6 +5748,11 @@ function ExpenseWorkspace({
         <ManagerReceiptUpload
           organizationId={organizationId}
           onClose={() => setShowReceiptUpload(false)}
+          onProcessed={() => setReceiptRevision((current) => current + 1)}
+          onOpenReview={() => {
+            setShowReceiptUpload(false);
+            selectSection("evidence");
+          }}
         />
       )}
       <div
@@ -5762,6 +5820,20 @@ function ExpenseWorkspace({
                   />
                 </>
               )}
+              {id === "evidence" && (
+                <>
+                  <ExpenseReviewQueue
+                    organizationId={organizationId}
+                    accountId={accountId}
+                    canReview={canReview}
+                    refreshToken={receiptRevision}
+                  />
+                  <ExpenseReminderSettings
+                    organizationId={organizationId}
+                    onScanComplete={() => setReceiptRevision((current) => current + 1)}
+                  />
+                </>
+              )}
               {id === "cards" && (
                 <>
                   {navigationContext?.cardReview && (
@@ -5770,7 +5842,7 @@ function ExpenseWorkspace({
                       organizationId={organizationId}
                       month={navigationContext.month}
                       onBack={() => onNavigate("dashboard")}
-                      onOpenReviewQueue={() => setShowReceiptUpload(true)}
+                      onOpenReviewQueue={() => selectSection("evidence")}
                     />
                   )}
                   <CorporateCards
