@@ -152,18 +152,47 @@ const numberValue = value => {
   return Number.isFinite(number) ? number : null;
 };
 
+const RECEIPT_METADATA_LINE = /(?:영수증|매출전표|거래\s*명세서|사업자|business(?:\s+registration)?\s*(?:no\.?|number)|대표|전화|주소|date|time|승인번호|승인\s*no\.?|approval\s*(?:no\.?|number)|카드번호|카드|card(?:\s*(?:no\.?|number))?|결제금액|받을금액|총\s*금액|총액|합\s*계|total(?:\s*amount)?|amount)/i;
+
+const receiptLineItems = lines => {
+  const items = [];
+  const append = (name, amount, rawText) => {
+    const normalizedName = String(name || '').replace(/\s+/g, ' ').trim();
+    const normalizedAmount = numberValue(amount);
+    if (!normalizedName || normalizedName.length > 120 || !/[가-힣A-Za-z]/.test(normalizedName) || RECEIPT_METADATA_LINE.test(normalizedName)) return;
+    if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) return;
+    items.push({ name: normalizedName, quantity: null, unitPrice: null, amount: normalizedAmount, confidence: 0.68, rawText });
+  };
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (RECEIPT_METADATA_LINE.test(line)) continue;
+    const inline = line.match(/^(.+?[가-힣A-Za-z][^\n]*?)\s+(?:KRW\s*)?[₩￦]?\s*([0-9][0-9,.]*)\s*(?:원|KRW)?$/i);
+    if (inline) {
+      append(inline[1], inline[2], line);
+      continue;
+    }
+    const next = lines[index + 1];
+    const adjacentAmount = next?.match(/^(?:KRW\s*)?[₩￦]?\s*([0-9][0-9,.]*)\s*(?:원|KRW)?$/i);
+    if (adjacentAmount) {
+      append(line, adjacentAmount[1], `${line} ${next}`);
+      if (items.at(-1)?.rawText === `${line} ${next}`) index += 1;
+    }
+  }
+  return items.map(({ rawText, ...item }) => item);
+};
+
 export function parseReceiptText(rawText) {
   const text = String(rawText || '');
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const dateMatch = text.match(/(20\d{2})[.\/-]\s*(\d{1,2})[.\/-]\s*(\d{1,2})/);
   const timeMatch = text.match(/(?:^|\s)([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?(?:\s|$)/m);
-  const business = text.match(/(?:사업자(?:등록)?번호|사업자)\s*[:：]?\s*(\d{3})[- ]?(\d{2})[- ]?(\d{5})/i);
-  const approval = text.match(/(?:승인번호|승인\s*No\.?)\s*[:：]?\s*([0-9A-Za-z-]{4,})/i);
-  const card = text.match(/(?:카드번호|카드)\s*[:：]?\s*(?:[*Xx#-]+\s*)?(\d{4})(?!\d)/i);
+  const business = text.match(/(?:사업자(?:등록)?번호|사업자|business(?:\s+registration)?\s*(?:no\.?|number))\s*[:：]?\s*(\d{3})[- ]?(\d{2})[- ]?(\d{5})/i);
+  const approval = text.match(/(?:승인번호|승인\s*No\.?|approval\s*(?:no\.?|number))\s*[:：]?\s*([0-9A-Za-z-]{4,})/i);
+  const card = text.match(/(?:카드번호|카드|card(?:\s*(?:no\.?|number))?)\s*[:：]?\s*(?:[*Xx#-]+\s*)?(\d{4})(?!\d)/i);
   const labelled = [...text.matchAll(/(?:금일\s*매출액|결제금액|받을금액|총\s*금액|총액|합\s*계|total(?:\s*amount)?|amount)\s*[:：]?\s*(?:KRW\s*)?[₩￦]?\s*([0-9][0-9,.]*)/gi)].map(match => numberValue(match[1])).filter(value => Number.isFinite(value) && value > 0);
   const currency = [...text.matchAll(/[₩￦]\s*([0-9][0-9,.]*)/g)].map(match => numberValue(match[1])).filter(value => Number.isFinite(value) && value > 0);
   const totalAmount = labelled.at(-1) || (currency.length ? Math.max(...currency) : null);
-  const merchantName = lines.find(line => !/영수증|매출전표|거래\s*명세서|사업자|대표|전화|주소|카드번호|승인번호/i.test(line) && /[가-힣A-Za-z]/.test(line)) || null;
+  const merchantName = lines.find(line => !RECEIPT_METADATA_LINE.test(line) && /[가-힣A-Za-z]/.test(line)) || null;
   const transactionDate = dateMatch ? `${dateMatch[1]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[3].padStart(2, '0')}` : null;
   const missing = [!merchantName && 'merchant_name', !transactionDate && 'transaction_date', !totalAmount && 'total_amount'].filter(Boolean);
   return {
@@ -173,7 +202,7 @@ export function parseReceiptText(rawText) {
     totalAmount, supplyAmount: null, vatAmount: null,
     approvalNumber: approval?.[1] || null, cardLast4: card?.[1] || null,
     currency: 'KRW', paymentMethod: card ? 'corporate_card' : null,
-    rawText: text.slice(0, 100_000), lineItems: [],
+    rawText: text.slice(0, 100_000), lineItems: receiptLineItems(lines),
     confidence: missing.length ? 0.58 : 0.86,
     fieldConfidence: { merchantName: merchantName ? 0.72 : 0, transactionDate: transactionDate ? 0.9 : 0, totalAmount: totalAmount ? 0.85 : 0 },
     warnings: missing.map(field => `missing_${field}`),

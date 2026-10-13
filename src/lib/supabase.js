@@ -10,9 +10,9 @@ let refreshSessionInFlight = null;
 // A stalled network request must never leave the application behind an
 // indefinite full-screen loader. Keep the timeout here so auth and workforce
 // reads fail consistently and the UI can recover with a visible retry path.
-const requestWithTimeout = (request, label = '요청') => Promise.race([
+const requestWithTimeout = (request, label = '요청', timeoutMs = 15000) => Promise.race([
   request,
-  new Promise((_, reject) => window.setTimeout(() => reject(new Error(`${label}_timeout`)), 15000)),
+  new Promise((_, reject) => window.setTimeout(() => reject(new Error(`${label}_timeout`)), timeoutMs)),
 ]);
 
 // Supabase may report any of these while a persisted refresh token has already
@@ -590,7 +590,7 @@ export async function createManualExpense(input) {
   return cardConnectionRequest('expenses', { method: 'POST', body: input });
 }
 export async function processReceiptDocument({ organizationId, documentId }) {
-  const payload = await cardConnectionRequest('receipt-process', { method: 'POST', body: { organizationId, documentId, action: 'enqueue' } });
+  const payload = await cardConnectionRequest('receipt-process', { method: 'POST', body: { organizationId, documentId, action: 'enqueue' }, timeoutMs: 70000 });
   return payload;
 }
 export async function analyzeReceiptWithTimefitAx({ organizationId, documentId, imageUrl, imageUrls, requestId }) {
@@ -679,7 +679,7 @@ export async function disconnectCorporateCard(id) {
   if (error) throw error; return data;
 }
 
-async function cardConnectionRequest(path, { method = 'GET', query, body } = {}) {
+async function cardConnectionRequest(path, { method = 'GET', query, body, timeoutMs = 15000 } = {}) {
   const client = requireClient();
   const { data: { session } } = await client.auth.getSession();
   if (!session?.access_token) throw new Error('로그인이 필요합니다.');
@@ -688,7 +688,7 @@ async function cardConnectionRequest(path, { method = 'GET', query, body } = {})
     method,
     headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
-  }), 'card_connection');
+  }), 'card_connection', timeoutMs);
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(payload.error || '카드사 연결 요청을 완료하지 못했습니다.');
