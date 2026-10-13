@@ -26,12 +26,12 @@ const extractDate = text => {
 
 export const structuredReceipt = (text, annotation = null) => {
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const businessNumber = text.match(/(?:사업자(?:등록)?번호|사업자)\s*[:：]?\s*(\d{3})[- ]?(\d{2})[- ]?(\d{5})/i);
-  const approvalNumber = text.match(/(?:승인번호|승인 No\.?)\s*[:：]?\s*([0-9A-Za-z-]{4,})/i);
-  const last4 = text.match(/(?:카드번호|카드)\s*[:：]?\s*(?:[*Xx#-]+\s*)?(\d{4})(?!\d)/i);
+  const businessNumber = text.match(/(?:사업자(?:등록)?번호|사업자|business(?:\s+registration)?\s*(?:no\.?|number))\s*[:：]?\s*(\d{3})[- ]?(\d{2})[- ]?(\d{5})/i);
+  const approvalNumber = text.match(/(?:승인번호|승인 No\.?|approval\s*(?:no\.?|number))\s*[:：]?\s*([0-9A-Za-z-]{4,})/i);
+  const last4 = text.match(/(?:카드번호|카드|card(?:\s*(?:no\.?|number))?)\s*[:：]?\s*(?:[*Xx#-]+\s*)?(\d{4})(?!\d)/i);
   const spatial = annotation ? extractSpatialReceipt(annotation, text) : {};
   return {
-    merchantName: spatial.merchantName || lines.find(line => !/영수증|매출전표|거래\s*명세서|사업자|대표|전화|주소/i.test(line) && /[가-힣A-Za-z]/.test(line)) || null,
+    merchantName: spatial.merchantName || lines.find(line => !/영수증|매출전표|거래\s*명세서|사업자|business(?:\s+registration)?\s*(?:no\.?|number)|대표|전화|주소/i.test(line) && /[가-힣A-Za-z]/.test(line)) || null,
     transactionDate: extractDate(text), totalAmount: spatial.totalAmount || extractAmount(text),
     merchantBusinessNumber: spatial.merchantBusinessNumber || (businessNumber ? `${businessNumber[1]}-${businessNumber[2]}-${businessNumber[3]}` : null),
     approvalNumber: approvalNumber?.[1] || null, cardLast4: last4?.[1] || null,
