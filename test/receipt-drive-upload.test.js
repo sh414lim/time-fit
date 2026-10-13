@@ -59,5 +59,6 @@ test('영수증 처리 요청은 AX 완료 시간을 고려한 전용 타임아�
   const source = await read('src/lib/supabase.js');
   assert.match(source, /requestWithTimeout = \(request, label = '요청', timeoutMs = 15000\)/);
   assert.match(source, /receipt-process'[\s\S]*timeoutMs: 70000/);
+  assert.match(source, /method: 'PATCH'[\s\S]*action: 'submitter_confirm'[\s\S]*timeoutMs: 70000/);
   assert.match(source, /'card_connection', timeoutMs/);
 });

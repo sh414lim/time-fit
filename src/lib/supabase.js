@@ -601,7 +601,7 @@ export async function loadReceiptSubmission({ organizationId, documentId }) {
   return cardConnectionRequest('receipt-process', { query: { organizationId, documentId } });
 }
 export async function confirmReceiptSubmission({ organizationId, documentId, patch }) {
-  return cardConnectionRequest('receipt-process', { method: 'PATCH', body: { organizationId, documentId, action: 'submitter_confirm', patch } });
+  return cardConnectionRequest('receipt-process', { method: 'PATCH', body: { organizationId, documentId, action: 'submitter_confirm', patch }, timeoutMs: 70000 });
 }
 export async function loadExpenseReviewQueue(organizationId, status = 'attention', costCenterId = '') {
   const payload = await cardConnectionRequest('expense-review', { query: { organizationId, status, ...(costCenterId ? { costCenterId } : {}) } });
