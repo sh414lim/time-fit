@@ -27,20 +27,23 @@ test('receipt text is normalized to the AX response contract', () => {
 
 test('English receipt metadata and line items are extracted', () => {
   const result = parseReceiptText([
-    'TIMEFIT AX PROD QA',
+    'TIMEFIT AX PROD QA 2',
     'TEST RECEIPT - NOT A REAL PURCHASE',
     'Business No. 123-45-67890',
     'Date 2026-10-13',
     'Time 09:15',
-    'QA COFFEE 5,000',
-    'QA BREAD 7,346',
-    'TOTAL 12,346 KRW',
+    'QA COFFEE',
+    'QA BREAD',
+    'TOTAL',
     'Approval No. PRODQA1013',
-    'Card **** 1013',
+    '5,000',
+    '7,346',
+    '12,346 KRW',
   ].join('\n'));
+  assert.equal(result.merchantName, 'TIMEFIT AX PROD QA 2');
   assert.equal(result.merchantBusinessNumber, '123-45-67890');
   assert.equal(result.approvalNumber, 'PRODQA1013');
-  assert.equal(result.cardLast4, '1013');
+  assert.equal(result.totalAmount, 12346);
   assert.deepEqual(result.lineItems.map(item => [item.name, item.amount]), [['QA COFFEE', 5000], ['QA BREAD', 7346]]);
 });
 

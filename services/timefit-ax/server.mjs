@@ -152,10 +152,18 @@ const numberValue = value => {
   return Number.isFinite(number) ? number : null;
 };
 
-const RECEIPT_METADATA_LINE = /(?:영수증|매출전표|거래\s*명세서|사업자|business(?:\s+registration)?\s*(?:no\.?|number)|대표|전화|주소|date|time|승인번호|승인\s*no\.?|approval\s*(?:no\.?|number)|카드번호|카드|card(?:\s*(?:no\.?|number))?|결제금액|받을금액|총\s*금액|총액|합\s*계|total(?:\s*amount)?|amount)/i;
+const RECEIPT_METADATA_LINE = /^(?:영수증|매출전표|거래\s*명세서|사업자|business(?:\s+registration)?\s*(?:no\.?|number)|대표|전화|주소|date(?:\s|:|$)|time(?:\s|:|$)|승인번호|승인\s*no\.?|approval\s*(?:no\.?|number)|카드번호|카드|card(?:\s*(?:no\.?|number))?|결제금액|받을금액|총\s*금액|총액|합\s*계|total(?:\s*amount)?|amount(?:\s|:|$))/i;
+const TOTAL_LABEL_LINE = /^(?:총\s*금액|총액|합\s*계|total(?:\s*amount)?)\s*[:：]?$/i;
+const MONEY_LINE = /^(?:KRW\s*)?[₩￦]?\s*([0-9][0-9,.]*)\s*(?:원|KRW)?$/i;
 
 const receiptLineItems = lines => {
   const items = [];
+  const totalLabelIndex = lines.findIndex(line => TOTAL_LABEL_LINE.test(line));
+  const headerEnd = totalLabelIndex >= 0 ? totalLabelIndex : lines.length;
+  let itemStart = 0;
+  for (let index = 0; index < headerEnd; index += 1) {
+    if (RECEIPT_METADATA_LINE.test(lines[index])) itemStart = index + 1;
+  }
   const append = (name, amount, rawText) => {
     const normalizedName = String(name || '').replace(/\s+/g, ' ').trim();
     const normalizedAmount = numberValue(amount);
@@ -163,7 +171,8 @@ const receiptLineItems = lines => {
     if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) return;
     items.push({ name: normalizedName, quantity: null, unitPrice: null, amount: normalizedAmount, confidence: 0.68, rawText });
   };
-  for (let index = 0; index < lines.length; index += 1) {
+  for (let index = itemStart; index < lines.length; index += 1) {
+    if (totalLabelIndex >= 0 && index >= totalLabelIndex) break;
     const line = lines[index];
     if (RECEIPT_METADATA_LINE.test(line)) continue;
     const inline = line.match(/^(.+?[가-힣A-Za-z][^\n]*?)\s+(?:KRW\s*)?[₩￦]?\s*([0-9][0-9,.]*)\s*(?:원|KRW)?$/i);
@@ -172,10 +181,17 @@ const receiptLineItems = lines => {
       continue;
     }
     const next = lines[index + 1];
-    const adjacentAmount = next?.match(/^(?:KRW\s*)?[₩￦]?\s*([0-9][0-9,.]*)\s*(?:원|KRW)?$/i);
+    const adjacentAmount = next?.match(MONEY_LINE);
     if (adjacentAmount) {
       append(line, adjacentAmount[1], `${line} ${next}`);
       if (items.at(-1)?.rawText === `${line} ${next}`) index += 1;
+    }
+  }
+  if (!items.length) {
+    if (totalLabelIndex > 0) {
+      const names = lines.slice(itemStart, totalLabelIndex).filter(line => !RECEIPT_METADATA_LINE.test(line) && /[가-힣A-Za-z]/.test(line));
+      const amounts = lines.slice(totalLabelIndex + 1).map(line => line.match(MONEY_LINE)?.[1]).filter(Boolean);
+      names.forEach((name, index) => append(name, amounts[index], `${name} ${amounts[index] || ''}`.trim()));
     }
   }
   return items.map(({ rawText, ...item }) => item);
@@ -191,7 +207,8 @@ export function parseReceiptText(rawText) {
   const card = text.match(/(?:카드번호|카드|card(?:\s*(?:no\.?|number))?)\s*[:：]?\s*(?:[*Xx#-]+\s*)?(\d{4})(?!\d)/i);
   const labelled = [...text.matchAll(/(?:금일\s*매출액|결제금액|받을금액|총\s*금액|총액|합\s*계|total(?:\s*amount)?|amount)\s*[:：]?\s*(?:KRW\s*)?[₩￦]?\s*([0-9][0-9,.]*)/gi)].map(match => numberValue(match[1])).filter(value => Number.isFinite(value) && value > 0);
   const currency = [...text.matchAll(/[₩￦]\s*([0-9][0-9,.]*)/g)].map(match => numberValue(match[1])).filter(value => Number.isFinite(value) && value > 0);
-  const totalAmount = labelled.at(-1) || (currency.length ? Math.max(...currency) : null);
+  const looseAmounts = lines.map(line => line.match(MONEY_LINE)?.[1]).map(numberValue).filter(value => Number.isFinite(value) && value > 0);
+  const totalAmount = labelled.at(-1) || (currency.length ? Math.max(...currency) : null) || looseAmounts.at(-1) || null;
   const merchantName = lines.find(line => !RECEIPT_METADATA_LINE.test(line) && /[가-힣A-Za-z]/.test(line)) || null;
   const transactionDate = dateMatch ? `${dateMatch[1]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[3].padStart(2, '0')}` : null;
   const missing = [!merchantName && 'merchant_name', !transactionDate && 'transaction_date', !totalAmount && 'total_amount'].filter(Boolean);
