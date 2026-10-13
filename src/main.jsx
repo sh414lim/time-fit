@@ -7126,6 +7126,7 @@ function Employees({
   onMove,
   canInvite,
   canManage,
+  canReorder = false,
   canViewPayroll = false,
 }) {
   const [query, setQuery] = useState("");
@@ -7135,6 +7136,7 @@ function Employees({
   const employeeGroups = groupStaffByType(visibleEmployees);
   const allEmployeeGroups = groupStaffByType(employees);
   const moveWithinDepartment = (employee, direction) => {
+    if (!onMove) return;
     const group = allEmployeeGroups.find(({ staff }) =>
       staff.some(({ id }) => id === employee.id),
     );
@@ -7197,8 +7199,7 @@ function Employees({
                     <Avatar name={e.name} color={e.color} />
                     <span className="grow">
                       <span className="employee-name-line">
-                        <b>{e.name}</b>
-                        {canManage && (
+                        {canReorder && (
                           <span className="employee-order-controls">
                             <button
                               type="button"
@@ -7224,6 +7225,7 @@ function Employees({
                             </button>
                           </span>
                         )}
+                        <b>{e.name}</b>
                       </span>
                       <small>{e.role}</small>
                     </span>
@@ -9464,8 +9466,11 @@ function App() {
     next.splice(to, 0, moved);
     setEmployees(next);
     try {
-      await revalidateManagementPermission("employee.manage");
-      await saveStaffOrder(next.map((employee) => employee.id));
+      await revalidateManagementPermission("employee.view");
+      await saveStaffOrder({
+        organizationId: authContext.membership.organization_id,
+        staffIds: next.map((employee) => employee.id),
+      });
     } catch (error) {
       setEmployees(previous);
       setToast(managementActionErrorMessage(error, "직원 순서를 저장하지 못했습니다."));
@@ -9562,7 +9567,10 @@ function App() {
     authContext.isOrganizationOwner ||
       authContext.managementAccount?.permissions?.includes("employee.manage"),
   );
-  const canRegisterEmployees = canManageEmployees && canManageCompensation;
+  const canReorderEmployees = Boolean(
+    authContext.isOrganizationOwner ||
+      authContext.managementAccount?.permissions?.includes("employee.view"),
+  );
   const canViewSales = Boolean(
     authContext.isOrganizationOwner ||
       authContext.managementAccount?.permissions?.includes("sales.view"),
@@ -9605,7 +9613,7 @@ function App() {
         organizationId={authContext.membership?.organization_id}
         accountId={authContext.session?.user?.id}
         canViewPayroll={canViewCompensation}
-        canManageEmployees={canRegisterEmployees}
+        canManageEmployees={canManageEmployees}
         isOwner={Boolean(authContext.isOrganizationOwner)}
         canAttendance={Boolean(
           authContext.isOrganizationOwner ||
@@ -9783,7 +9791,8 @@ function App() {
         onSelect={openEmployeeDetail}
         onMove={reorderEmployees}
         canInvite={Boolean(authContext.isOrganizationOwner)}
-        canManage={canRegisterEmployees}
+        canManage={canManageEmployees}
+        canReorder={canReorderEmployees}
         canViewPayroll={canViewCompensation}
       />
     ),
@@ -9962,6 +9971,7 @@ function App() {
     setEmployeeSaving(true);
     let staffId = null;
     try {
+      await revalidateManagementPermission("employee.manage");
       staffId = await createManualStaff({
         organizationId: authContext.membership.organization_id,
         name,
@@ -10645,7 +10655,7 @@ function App() {
           onClose={() => setToast("")}
         />
       )}
-      {modal === "employee" && canManageEmployees && canManageCompensation && (
+      {modal === "employee" && canManageEmployees && (
         <Modal
           title="직원 직접 등록"
           onClose={() => {
@@ -10698,55 +10708,59 @@ function App() {
                 />
               </label>
             </div>
-            <div className="form-row">
-              <label>
-                급여 형태
-                <select
-                  name="payType"
-                  defaultValue="hourly"
-                  disabled={employeeSaving}
-                >
-                  <option value="hourly">시급제</option>
-                  <option value="monthly">월급제</option>
-                  <option value="daily">일급제</option>
-                  <option value="annual">연봉제</option>
-                </select>
-              </label>
-              <label>
-                시급 (시급제)
-                <MoneyInput
-                  name="hourlyWage"
-                  placeholder="예: 12,000"
-                  disabled={employeeSaving}
-                />
-              </label>
-            </div>
-            <div className="form-row">
-              <label>
-                일급 (일급제)
-                <MoneyInput
-                  name="dailyWage"
-                  placeholder="예: 100,000"
-                  disabled={employeeSaving}
-                />
-              </label>
-              <label>
-                월급 (월급제)
-                <MoneyInput
-                  name="monthlySalary"
-                  placeholder="예: 2,500,000"
-                  disabled={employeeSaving}
-                />
-              </label>
-            </div>
-            <label>
-              연봉 (연봉제)
-              <MoneyInput
-                name="annualSalary"
-                placeholder="예: 36,000,000"
-                disabled={employeeSaving}
-              />
-            </label>
+            {canManageCompensation && (
+              <>
+                <div className="form-row">
+                  <label>
+                    급여 형태
+                    <select
+                      name="payType"
+                      defaultValue="hourly"
+                      disabled={employeeSaving}
+                    >
+                      <option value="hourly">시급제</option>
+                      <option value="monthly">월급제</option>
+                      <option value="daily">일급제</option>
+                      <option value="annual">연봉제</option>
+                    </select>
+                  </label>
+                  <label>
+                    시급 (시급제)
+                    <MoneyInput
+                      name="hourlyWage"
+                      placeholder="예: 12,000"
+                      disabled={employeeSaving}
+                    />
+                  </label>
+                </div>
+                <div className="form-row">
+                  <label>
+                    일급 (일급제)
+                    <MoneyInput
+                      name="dailyWage"
+                      placeholder="예: 100,000"
+                      disabled={employeeSaving}
+                    />
+                  </label>
+                  <label>
+                    월급 (월급제)
+                    <MoneyInput
+                      name="monthlySalary"
+                      placeholder="예: 2,500,000"
+                      disabled={employeeSaving}
+                    />
+                  </label>
+                </div>
+                <label>
+                  연봉 (연봉제)
+                  <MoneyInput
+                    name="annualSalary"
+                    placeholder="예: 36,000,000"
+                    disabled={employeeSaving}
+                  />
+                </label>
+              </>
+            )}
             {authContext.isOrganizationOwner && (
               <section className="sensitive-registration">
                 <b>
