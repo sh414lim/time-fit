@@ -13,22 +13,25 @@ import {
   updateExpenseDraft,
 } from '../../lib/supabase';
 import { readViewCache, writeViewCache } from '../../lib/viewCache';
+import { expenseReviewStateKey, normalizeExpenseReviewState, readExpenseUiState, writeExpenseUiState } from './expenseWorkspaceState';
 
 const money = value => new Intl.NumberFormat('ko-KR', { style: 'currency', currency: 'KRW', maximumFractionDigits: 0 }).format(Number(value) || 0);
 const REVIEW_CACHE_TTL_MS = 5 * 60_000;
 
 export default function ExpenseReviewQueue({ organizationId, accountId = '', canReview = true, focusDocumentId = '', refreshToken = 0 }) {
-  const initialCacheKey = `expense-review:${accountId || 'account'}:${organizationId}:attention:all`;
+  const stateKey = expenseReviewStateKey(accountId, organizationId);
+  const initialState = useRef(readExpenseUiState(stateKey, normalizeExpenseReviewState)).current;
+  const initialCacheKey = `expense-review:${accountId || 'account'}:${organizationId}:${initialState.status}:${initialState.costCenterId || 'all'}`;
   const initialDocuments = readViewCache(initialCacheKey, Date.now(), REVIEW_CACHE_TTL_MS);
   const [documents, setDocuments] = useState(initialDocuments || []);
   const [loading, setLoading] = useState(!initialDocuments);
   const [busyId, setBusyId] = useState('');
-  const [expandedId, setExpandedId] = useState('');
+  const [expandedId, setExpandedId] = useState(initialState.expandedId);
   const [message, setMessage] = useState('');
   const [selectedIds, setSelectedIds] = useState([]);
   const [costCenters, setCostCenters] = useState([]);
-  const [costCenterId, setCostCenterId] = useState('');
-  const [status, setStatus] = useState('attention');
+  const [costCenterId, setCostCenterId] = useState(initialState.costCenterId);
+  const [status, setStatus] = useState(initialState.status);
   const [originalUrls, setOriginalUrls] = useState({});
   const focusedDocumentId = useRef('');
   const cacheKey = `expense-review:${accountId || 'account'}:${organizationId}:${status}:${costCenterId || 'all'}`;
@@ -58,6 +61,17 @@ export default function ExpenseReviewQueue({ organizationId, accountId = '', can
     return () => window.clearInterval(timer);
   }, [documents, cacheKey]);
   useEffect(() => { if (organizationId) loadCostCenters(organizationId).then(setCostCenters).catch(() => setCostCenters([])); }, [organizationId]);
+  useEffect(() => {
+    writeExpenseUiState(stateKey, { status, costCenterId, expandedId }, normalizeExpenseReviewState);
+  }, [stateKey, status, costCenterId, expandedId]);
+  useEffect(() => {
+    if (!expandedId || loading || originalUrls[expandedId]) return;
+    const targetDocument = documents.find(item => item.id === expandedId);
+    if (!targetDocument) { setExpandedId(''); return; }
+    openFinanceDocument(targetDocument.storage_path)
+      .then(url => setOriginalUrls(urls => ({ ...urls, [expandedId]: url })))
+      .catch(error => setMessage(error.message || '영수증 원본을 불러오지 못했습니다.'));
+  }, [documents, expandedId, loading, originalUrls]);
   useEffect(() => {
     if (!focusDocumentId || loading || focusedDocumentId.current === focusDocumentId) return;
     const targetDocument = documents.find(item => item.id === focusDocumentId);

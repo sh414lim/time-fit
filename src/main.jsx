@@ -22,6 +22,7 @@ import ExpenseReminderSettings from './features/finance/ExpenseReminderSettings'
 import ExpenseLedger from './features/finance/ExpenseLedger';
 import ManualExpenseForm from './features/finance/ManualExpenseForm';
 import { prepareReceiptFiles } from './features/finance/receiptQuality';
+import { expenseWorkspaceStateKey, normalizeExpenseWorkspaceState, readExpenseUiState, writeExpenseUiState } from './features/finance/expenseWorkspaceState';
 import { createReceiptSubmission, processReceiptDocument } from './lib/supabase';
 import { acceptEmployeeInvitation, activateTabletDevice, archiveCostCenter, bootstrapTossPlaceConnection, createCorporateCard, createFeedbackItem, createLeaveRequest, createManagementAccount, createManualStaff, createMeetingNote, deleteFinanceDocument, deleteStaffCategory, deleteWorkSchedule, disconnectCorporateCard, ensureManagerOrganization, getAuthContext, getCachedOrganizationSalesDashboard, getManagerTabletOrganization, getOrganizationSettings, getStaticAttendanceQr, getTabletDeviceContext, getTossPlaceConnection, grantStaffLeave, importCardTransactions, importFeedbackItems, inviteEmployeeByCode, isAuthSessionError, loadCardTransactions, loadCorporateCards, loadCostCenters, loadDriveReceiptUploads, loadFeedbackItems, loadFinanceDocuments, loadManagementAccounts, loadMeetingNotes, loadOperationalAlerts, loadOrganizationSalesDashboard, loadPayrollWorkspace, loadStaffCategories, loadStaffSensitiveProfile, loadTabletDevices, loadWorkforce, manageManagementAccount, markOperationalAlertRead, openFinanceDocument, previewTabletLeaveRequest, recordQrAttendance, reviewLeaveRequest, reviewWorkSchedule, revokeTabletDevice, runMonthEndOperations, saveCostCenter, saveCustomTossPlaceCredentials, saveOrganizationSettings, savePayrollContract, savePayrollDraft, saveStaffCategory, saveStaffOrder, saveStaffSensitiveProfile, saveTossPlaceConnection, saveWorkSchedule, saveWorkSchedulesBulk, sendSettlementEmail, signIn, signOut, signUp, supabase, syncOrganizationSales, tabletAttendance, tabletLeaveRequest, updateCorporateCard, updateFeedbackItem, updateStaffPhone, updateStaffProfile, uploadFinanceDocument, uploadReceiptToGoogleDrive, uploadStaffAvatar } from './lib/supabase';
 
@@ -5694,7 +5695,9 @@ function ExpenseWorkspace({
   onNavigate,
   canReview = false,
 }) {
-  const initialSection = navigationContext?.cardReview ? "cards" : "overview";
+  const stateKey = expenseWorkspaceStateKey(accountId, organizationId);
+  const restoredState = readExpenseUiState(stateKey, normalizeExpenseWorkspaceState);
+  const initialSection = navigationContext?.cardReview ? "cards" : restoredState.section;
   const [section, setSection] = useState(initialSection);
   const [showReceiptUpload, setShowReceiptUpload] = useState(false);
   const [receiptRevision, setReceiptRevision] = useState(0);
@@ -5706,6 +5709,9 @@ function ExpenseWorkspace({
   useEffect(() => {
     if (navigationContext?.cardReview) selectSection("cards");
   }, [navigationContext?.cardReview, navigationContext?.month]);
+  useEffect(() => {
+    writeExpenseUiState(stateKey, { section }, normalizeExpenseWorkspaceState);
+  }, [section, stateKey]);
   const fromException = (item) => {
     if (item.target === "receipts") {
       selectSection("evidence");
