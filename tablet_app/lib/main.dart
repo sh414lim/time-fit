@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
@@ -8,9 +11,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 // The store tablet is a production-only client. Keep safe production defaults
 // so a plain `flutter build apk` cannot silently produce an app that renders
-// its UI but is unable to call employee/QR RPCs. Both values are public client
-// configuration; --dart-define can still override them for local or staging
-// builds.
+// its UI but is unable to call employee/QR/short-term worker APIs. Both values
+// are public client configuration; --dart-define can still override them for
+// local or staging builds.
 const supabaseUrl = String.fromEnvironment(
   'SUPABASE_URL',
   defaultValue: 'https://xzcvgxnhospcedeebnsf.supabase.co',
@@ -23,6 +26,10 @@ const mobileAppUrl = String.fromEnvironment(
   'MOBILE_APP_URL',
   defaultValue: 'https://timefit-mobile.vercel.app/',
 );
+const tabletApiBaseUrl = String.fromEnvironment(
+  'TABLET_API_BASE_URL',
+  defaultValue: 'https://timefit-omega.vercel.app',
+);
 
 String mobileAttendanceQrUrl(String qrToken) {
   final base = Uri.parse(mobileAppUrl);
@@ -31,6 +38,7 @@ String mobileAttendanceQrUrl(String qrToken) {
     fragment: 'attendance',
   ).toString();
 }
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (supabaseUrl.isNotEmpty && supabasePublishableKey.isNotEmpty) {
@@ -76,6 +84,9 @@ class _TabletShellState extends State<TabletShell> {
   final attendancePhone = TextEditingController();
   final attendancePhoneLast8 = TextEditingController();
   final leavePhone = TextEditingController();
+  final dailyName = TextEditingController();
+  final dailyResident = TextEditingController();
+  final dailyPhone = TextEditingController();
   final date = TextEditingController();
   final emailFocus = FocusNode();
   final passwordFocus = FocusNode();
@@ -94,10 +105,47 @@ class _TabletShellState extends State<TabletShell> {
   String? qrError;
   bool qrLoading = false;
   String leaveType = '연차';
+  String dailyAction = 'check_in';
+  bool dailyPrivacyConsent = false;
+  Timer? dailyIdleTimer;
   @override
   void initState() {
     super.initState();
+    dailyName.addListener(_scheduleDailyPrivacyReset);
+    dailyResident.addListener(_scheduleDailyPrivacyReset);
+    dailyPhone.addListener(_scheduleDailyPrivacyReset);
     _load();
+  }
+
+  @override
+  void dispose() {
+    dailyIdleTimer?.cancel();
+    dailyName.dispose();
+    dailyResident.dispose();
+    dailyPhone.dispose();
+    super.dispose();
+  }
+
+  void _scheduleDailyPrivacyReset() {
+    dailyIdleTimer?.cancel();
+    if (dailyName.text.isEmpty &&
+        dailyResident.text.isEmpty &&
+        dailyPhone.text.isEmpty) return;
+    dailyIdleTimer = Timer(const Duration(minutes: 2), () {
+      if (mounted) _resetDailyWorkerForm();
+    });
+  }
+
+  void _resetDailyWorkerForm({String? action}) {
+    dailyIdleTimer?.cancel();
+    dailyName.clear();
+    dailyResident.clear();
+    dailyPhone.clear();
+    if (!mounted) return;
+    setState(() {
+      dailyAction = action ?? dailyAction;
+      dailyPrivacyConsent = false;
+    });
   }
 
   Future<void> _load() async {
@@ -141,6 +189,11 @@ class _TabletShellState extends State<TabletShell> {
       attendancePhone.clear();
       attendancePhoneLast8.clear();
       leavePhone.clear();
+      dailyName.clear();
+      dailyResident.clear();
+      dailyPhone.clear();
+      dailyPrivacyConsent = false;
+      dailyAction = 'check_in';
       date.clear();
       email.clear();
       password.clear();
@@ -149,6 +202,7 @@ class _TabletShellState extends State<TabletShell> {
   }
 
   Future<void> _selectMode(String nextMode) async {
+    if (mode == 'daily' && nextMode != 'daily') _resetDailyWorkerForm();
     setState(() => mode = nextMode);
     if (nextMode == 'qr' && qrToken == null && !qrLoading) {
       await _loadAttendanceQr();
@@ -589,6 +643,342 @@ class _TabletShellState extends State<TabletShell> {
     }
   }
 
+  String _dailyRequestKey() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    final hex =
+        bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+  }
+
+  String _maskedDailyPhone(String value) {
+    if (value.length < 8) return value;
+    return '${value.substring(0, 3)}-${List.filled(value.length - 7, '*').join()}-${value.substring(value.length - 4)}';
+  }
+
+  String _maskedDailyResident(String value) => value.length == 13
+      ? '${value.substring(0, 6)}-${value.substring(6, 7)}******'
+      : '';
+
+  String _dailyAttendanceTime(dynamic value) {
+    if (value == null || value.toString().isEmpty) return '-';
+    final parsed = DateTime.tryParse(value.toString());
+    if (parsed == null) return '-';
+    final korea = parsed.toUtc().add(const Duration(hours: 9));
+    return '${korea.hour.toString().padLeft(2, '0')}:${korea.minute.toString().padLeft(2, '0')}';
+  }
+
+  String _dailyAttendanceDate(dynamic value) {
+    final parsed = DateTime.tryParse(value?.toString() ?? '');
+    if (parsed == null) return '-';
+    const weekdays = ['월', '화', '수', '목', '금', '토', '일'];
+    return '${parsed.year}년 ${parsed.month}월 ${parsed.day}일 (${weekdays[parsed.weekday - 1]})';
+  }
+
+  String _dailyWorkedTime(dynamic checkedInAt, dynamic checkedOutAt) {
+    if (checkedInAt == null || checkedOutAt == null) return '근무 중';
+    final start = DateTime.tryParse(checkedInAt.toString());
+    final end = DateTime.tryParse(checkedOutAt.toString());
+    if (start == null || end == null) return '-';
+    final minutes = end.difference(start).inMinutes.clamp(0, 99999);
+    if (minutes < 60) return '$minutes분';
+    final remainder = minutes % 60;
+    return '${minutes ~/ 60}시간${remainder > 0 ? ' $remainder분' : ''}';
+  }
+
+  String _dailyWorkerErrorMessage(Object error) {
+    final detail = error.toString();
+    if (detail.contains('daily_worker_invalid_phone'))
+      return '휴대전화 번호를 010부터 정확히 입력해 주세요.';
+    if (detail.contains('daily_worker_invalid_resident'))
+      return '주민등록번호와 생년월일을 다시 확인해 주세요.';
+    if (detail.contains('daily_worker_invalid_name'))
+      return '이름은 2자 이상 입력해 주세요.';
+    if (detail.contains('daily_worker_privacy_consent_required'))
+      return '개인정보 수집·이용 동의가 필요합니다.';
+    if (detail.contains('daily_worker_identity_conflict'))
+      return '기존 등록 정보와 일치하지 않습니다. 관리자에게 문의해 주세요.';
+    if (detail.contains('daily_worker_already_checked_in'))
+      return '이미 출근 등록이 완료됐습니다.';
+    if (detail.contains('daily_worker_already_checked_out'))
+      return '오늘의 퇴근 등록이 이미 완료됐습니다.';
+    if (detail.contains('daily_worker_open_attendance_not_found'))
+      return '퇴근할 출근 기록을 찾지 못했습니다. 전화번호를 확인해 주세요.';
+    if (detail.contains('daily_worker_additional_verification_required'))
+      return '같은 전화번호로 여러 근로자가 확인됩니다. 관리자에게 문의해 주세요.';
+    if (detail.contains('tablet_device_not_active'))
+      return '태블릿 연결이 만료됐습니다. 관리자 연결이 필요합니다.';
+    if (detail.contains('tablet_access_denied'))
+      return '이 사업장의 태블릿 출퇴근 기능이 비활성화되어 있습니다.';
+    if (detail.contains('daily_worker_secure_storage_unavailable'))
+      return '보안 저장 설정을 확인하는 중입니다. 관리자에게 문의해 주세요.';
+    return '단기직원 출퇴근 기록을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.';
+  }
+
+  Future<Map<String, dynamic>> _postDailyWorker(
+      Map<String, dynamic> payload) async {
+    final client = HttpClient();
+    try {
+      final base = Uri.parse(tabletApiBaseUrl);
+      final uri = base.replace(
+          path: '/api/daily-worker-attendance', query: null, fragment: null);
+      final request =
+          await client.postUrl(uri).timeout(const Duration(seconds: 12));
+      request.headers.contentType = ContentType.json;
+      request.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
+      request.write(jsonEncode(payload));
+      final response =
+          await request.close().timeout(const Duration(seconds: 15));
+      final text = await utf8.decoder.bind(response).join();
+      final result = text.isEmpty
+          ? <String, dynamic>{}
+          : Map<String, dynamic>.from(jsonDecode(text) as Map);
+      if (response.statusCode < 200 ||
+          response.statusCode >= 300 ||
+          result['ok'] != true) {
+        throw Exception(result['error']?.toString() ?? 'daily_worker_failed');
+      }
+      return Map<String, dynamic>.from(result['data'] as Map);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<void> _saveDailyWorker({
+    required String action,
+    required String requestKey,
+    required String name,
+    required String resident,
+    required String phone,
+  }) async {
+    setState(() => busy = true);
+    try {
+      final result = await _postDailyWorker({
+        'action': action,
+        'deviceToken': token,
+        'requestKey': requestKey,
+        'phone': phone,
+        if (action == 'check_in') ...{
+          'name': name,
+          'residentRegistrationNumber': resident,
+          'privacyConsent': true,
+        }
+      });
+      final employeeName = result['employeeName']?.toString() ?? name;
+      final reviewRequired = result['action'] == 'review_required';
+      final workDate = _dailyAttendanceDate(result['workDate']);
+      final checkedInAt = _dailyAttendanceTime(result['checkedInAt']);
+      final checkedOutAt = _dailyAttendanceTime(result['checkedOutAt']);
+      final workedTime = reviewRequired
+          ? '관리자 확인 필요'
+          : _dailyWorkedTime(result['checkedInAt'], result['checkedOutAt']);
+      _resetDailyWorkerForm(action: action);
+      _show(reviewRequired
+          ? '$employeeName님의 이전 출근 기록은 관리자의 확인이 필요합니다.\n\n날짜  $workDate\n출근  $checkedInAt\n퇴근  $checkedOutAt\n근무시간  $workedTime'
+          : '$employeeName님 ${action == 'check_in' ? '출근' : '퇴근'} 등록이 완료됐습니다.\n\n날짜  $workDate\n출근  $checkedInAt\n퇴근  $checkedOutAt\n근무시간  $workedTime');
+    } on TimeoutException {
+      _show('서버 응답이 지연되고 있습니다. 같은 화면에서 다시 시도해 주세요.');
+    } catch (error) {
+      _show(_dailyWorkerErrorMessage(error));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> _confirmDailyWorker() async {
+    FocusScope.of(context).unfocus();
+    final action = dailyAction;
+    final name = dailyName.text.trim().replaceAll(RegExp(r'\s+'), ' ');
+    final resident = dailyResident.text;
+    final phone = dailyPhone.text;
+    if (!RegExp(r'^01[016789][0-9]{7,8}$').hasMatch(phone))
+      return _show('휴대전화 번호를 010부터 정확히 입력해 주세요.');
+    if (action == 'check_in') {
+      if (name.length < 2) return _show('이름은 2자 이상 입력해 주세요.');
+      if (!RegExp(r'^[0-9]{13}$').hasMatch(resident))
+        return _show('주민등록번호 13자리를 입력해 주세요.');
+      if (!dailyPrivacyConsent) return _show('개인정보 수집·이용 동의가 필요합니다.');
+    }
+    final requestKey = _dailyRequestKey();
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '단기직원 출퇴근 확인',
+      barrierColor: const Color(0xA60F172A),
+      pageBuilder: (dialogContext, _, __) => Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 480),
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(36, 34, 36, 28),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(30),
+                boxShadow: const [
+                  BoxShadow(
+                      color: Color(0x3D0F172A),
+                      blurRadius: 42,
+                      offset: Offset(0, 18))
+                ],
+              ),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  width: 68,
+                  height: 68,
+                  decoration: const BoxDecoration(
+                      color: Color(0xffe8f2ff), shape: BoxShape.circle),
+                  child: const Icon(Icons.verified_user_rounded,
+                      color: Color(0xff3182f6), size: 36),
+                ),
+                const SizedBox(height: 20),
+                Text(action == 'check_in' ? '$name님, 출근할까요?' : '입력한 번호로 퇴근할까요?',
+                    style: const TextStyle(
+                        fontSize: 25, fontWeight: FontWeight.w800),
+                    textAlign: TextAlign.center),
+                const SizedBox(height: 18),
+                if (action == 'check_in')
+                  _confirmationRow('주민번호', _maskedDailyResident(resident)),
+                if (action == 'check_in') _confirmationRow('이름', name),
+                _confirmationRow('전화번호', _maskedDailyPhone(phone)),
+                const SizedBox(height: 12),
+                const Text('확정 후에는 관리자에게 수정을 요청해야 합니다.',
+                    style: TextStyle(color: Color(0xff8b95a1), fontSize: 13)),
+                const SizedBox(height: 26),
+                Row(children: [
+                  Expanded(
+                      child: OutlinedButton(
+                          onPressed: () => Navigator.pop(dialogContext),
+                          style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(0, 58)),
+                          child: const Text('수정'))),
+                  const SizedBox(width: 12),
+                  Expanded(
+                      child: FilledButton(
+                          onPressed: () {
+                            Navigator.pop(dialogContext);
+                            _saveDailyWorker(
+                                action: action,
+                                requestKey: requestKey,
+                                name: name,
+                                resident: resident,
+                                phone: phone);
+                          },
+                          child:
+                              Text(action == 'check_in' ? '출근 등록' : '퇴근 등록'))),
+                ])
+              ]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _confirmationRow(String label, String value) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child:
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text(label, style: const TextStyle(color: Color(0xff8b95a1))),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w800)),
+        ]),
+      );
+
+  Widget _dailyWorkerPanel() {
+    final checkIn = dailyAction == 'check_in';
+    final inputDecoration = (String label, String hint) => InputDecoration(
+        labelText: label, hintText: hint, border: const OutlineInputBorder());
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const Text('단기직원 출퇴근',
+          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+      const SizedBox(height: 6),
+      const Text('이 태블릿에 연결된 사업장으로 근무 기록이 저장됩니다.',
+          style: TextStyle(color: Color(0xff6b7684), fontSize: 14)),
+      const SizedBox(height: 20),
+      SegmentedButton<String>(
+        segments: const [
+          ButtonSegment(
+              value: 'check_in',
+              label: Text('출근 등록'),
+              icon: Icon(Icons.login_rounded)),
+          ButtonSegment(
+              value: 'check_out',
+              label: Text('퇴근 등록'),
+              icon: Icon(Icons.logout_rounded)),
+        ],
+        selected: {dailyAction},
+        onSelectionChanged:
+            busy ? null : (value) => _resetDailyWorkerForm(action: value.first),
+        showSelectedIcon: false,
+      ),
+      const SizedBox(height: 20),
+      if (checkIn) ...[
+        TextField(
+          controller: dailyName,
+          textInputAction: TextInputAction.next,
+          maxLength: 30,
+          decoration: inputDecoration('이름', '신분증에 표시된 이름'),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: dailyResident,
+          keyboardType: TextInputType.number,
+          obscureText: true,
+          enableSuggestions: false,
+          autocorrect: false,
+          maxLength: 13,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          decoration: inputDecoration('주민등록번호', '숫자 13자리'),
+        ),
+        const SizedBox(height: 12),
+      ],
+      TextField(
+        controller: dailyPhone,
+        keyboardType: TextInputType.phone,
+        maxLength: 11,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        decoration: inputDecoration('휴대전화 번호', '01012345678'),
+      ),
+      if (checkIn) ...[
+        const SizedBox(height: 4),
+        CheckboxListTile(
+          value: dailyPrivacyConsent,
+          onChanged: busy
+              ? null
+              : (value) {
+                  setState(() => dailyPrivacyConsent = value == true);
+                  _scheduleDailyPrivacyReset();
+                },
+          controlAffinity: ListTileControlAffinity.leading,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('개인정보 수집·이용에 동의합니다.',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+          subtitle: const Text('출퇴근 식별과 근로 기록 관리를 위해 이름, 주민등록번호, 전화번호를 수집합니다.',
+              style: TextStyle(fontSize: 12, height: 1.45)),
+        ),
+      ],
+      const SizedBox(height: 16),
+      Align(
+        alignment: Alignment.center,
+        child: SizedBox(
+            width: 440,
+            child: FilledButton(
+                onPressed: busy ? null : _confirmDailyWorker,
+                child: Text(busy
+                    ? '처리 중…'
+                    : checkIn
+                        ? '출근 정보 확인'
+                        : '퇴근 정보 확인'))),
+      ),
+      const SizedBox(height: 12),
+      const Text('입력 정보는 2분 동안 조작이 없으면 자동으로 초기화됩니다.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Color(0xff8b95a1), fontSize: 11)),
+    ]);
+  }
+
   Future<void> _openKeypad(TextEditingController target, int maxLength) async {
     final selectedValue = await showGeneralDialog<String>(
         context: context,
@@ -898,156 +1288,171 @@ class _TabletShellState extends State<TabletShell> {
 
   Widget _terminal() {
     final activePhone = mode == 'attendance' ? attendancePhone : leavePhone;
-    final children = <Widget>[
-      Text(mode == 'attendance' ? '전화번호 뒷 4자리로 확인하세요' : '전화번호와 날짜를 입력해 주세요.',
-          style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-      const SizedBox(height: 6),
-      Text(
-          mode == 'attendance'
-              ? '확인 후 출근 또는 퇴근 버튼이 표시됩니다.'
-              : '오늘 이후 날짜에 대해 휴가를 신청할 수 있어요.',
-          style: const TextStyle(color: Color(0xff6b7684), fontSize: 14)),
-      const SizedBox(height: 24),
-      InkWell(
-          borderRadius: BorderRadius.circular(16),
-          splashColor: const Color(0x1A3182f6),
-          highlightColor: const Color(0x143182f6),
-          onTapDown: (_) {
-            HapticFeedback.lightImpact();
-            _openKeypad(activePhone, mode == 'attendance' ? 4 : 8);
-          },
-          child: Container(
-              height: 76,
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              decoration: BoxDecoration(
-                  color: const Color(0xfffbfcfe),
-                  border: Border.all(
-                      color: activePhone.text.isEmpty
-                          ? const Color(0xffdfe5ec)
-                          : const Color(0xff3182f6),
-                      width: activePhone.text.isEmpty ? 1 : 2),
-                  borderRadius: BorderRadius.circular(16)),
-              child: Row(children: [
-                Expanded(
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                      Text(mode == 'attendance' ? '전화번호 뒷 4자리' : '전화번호 뒷 8자리',
-                          style: const TextStyle(
-                              color: Color(0xff6b7684),
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 4),
-                      Text(
-                          activePhone.text.isEmpty
-                              ? '숫자를 입력해 주세요'
-                              : activePhone.text,
-                          style: TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                              color: activePhone.text.isEmpty
-                                  ? const Color(0xff8b95a1)
-                                  : const Color(0xff191f28)))
-                    ])),
-                const Icon(Icons.dialpad_rounded, color: Color(0xff3182f6))
-              ]))),
-      if (mode == 'leave') ...[
-        const SizedBox(height: 20),
-        InkWell(
-            borderRadius: BorderRadius.circular(16),
-            splashColor: const Color(0x1A3182f6),
-            highlightColor: const Color(0x143182f6),
-            onTapDown: (_) async {
-              HapticFeedback.lightImpact();
-              final picked = await showDatePicker(
-                  context: context,
-                  firstDate: DateTime.now(),
-                  lastDate: DateTime.now().add(const Duration(days: 365)),
-                  initialDate: DateTime.now().add(const Duration(days: 1)));
-              if (picked != null)
-                setState(() =>
-                    date.text = picked.toIso8601String().substring(0, 10));
-            },
-            child: Container(
-                height: 70,
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                decoration: BoxDecoration(
-                    color: const Color(0xfffbfcfe),
-                    border: Border.all(color: const Color(0xffdfe5ec)),
-                    borderRadius: BorderRadius.circular(16)),
-                child: Row(children: [
-                  Expanded(
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                        const Text('휴가 날짜',
-                            style: TextStyle(
-                                color: Color(0xff6b7684),
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold)),
-                        Text(date.text.isEmpty ? '날짜를 선택해 주세요' : date.text,
-                            style: const TextStyle(
-                                fontSize: 18, fontWeight: FontWeight.bold))
-                      ])),
-                  const Icon(Icons.calendar_month_rounded)
-                ]))),
-        const SizedBox(height: 20),
-        const Align(
-            alignment: Alignment.centerLeft,
-            child:
-                Text('휴가 종류', style: TextStyle(fontWeight: FontWeight.bold))),
-        Row(
-            children: ['연차', '오전 반차', '오후 반차'].map<Widget>((type) {
-          final selected = leaveType == type;
-          final amount = type == '연차' ? '1일' : '0.5일';
-          return Expanded(
-              child: Padding(
-                  padding: const EdgeInsets.only(right: 10),
-                  child: SizedBox(
-                      height: 82,
-                      child: FilledButton(
-                          onPressed: () => setState(() => leaveType = type),
-                          style: FilledButton.styleFrom(
-                              elevation: selected ? 5 : 0,
-                              backgroundColor: selected
-                                  ? const Color(0xffeaf3ff)
-                                  : Colors.white,
-                              foregroundColor: selected
-                                  ? const Color(0xff2877dc)
-                                  : const Color(0xff6b7684),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16),
-                                  side: BorderSide(
-                                      color: selected
-                                          ? const Color(0xff3182f6)
-                                          : const Color(0xffdfe5ec),
-                                      width: selected ? 2 : 1))),
+    final children = mode == 'daily'
+        ? <Widget>[_dailyWorkerPanel()]
+        : <Widget>[
+            Text(
+                mode == 'attendance'
+                    ? '전화번호 뒷 4자리로 확인하세요'
+                    : '전화번호와 날짜를 입력해 주세요.',
+                style:
+                    const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            Text(
+                mode == 'attendance'
+                    ? '확인 후 출근 또는 퇴근 버튼이 표시됩니다.'
+                    : '오늘 이후 날짜에 대해 휴가를 신청할 수 있어요.',
+                style: const TextStyle(color: Color(0xff6b7684), fontSize: 14)),
+            const SizedBox(height: 24),
+            InkWell(
+                borderRadius: BorderRadius.circular(16),
+                splashColor: const Color(0x1A3182f6),
+                highlightColor: const Color(0x143182f6),
+                onTapDown: (_) {
+                  HapticFeedback.lightImpact();
+                  _openKeypad(activePhone, mode == 'attendance' ? 4 : 8);
+                },
+                child: Container(
+                    height: 76,
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    decoration: BoxDecoration(
+                        color: const Color(0xfffbfcfe),
+                        border: Border.all(
+                            color: activePhone.text.isEmpty
+                                ? const Color(0xffdfe5ec)
+                                : const Color(0xff3182f6),
+                            width: activePhone.text.isEmpty ? 1 : 2),
+                        borderRadius: BorderRadius.circular(16)),
+                    child: Row(children: [
+                      Expanded(
                           child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Text(amount,
-                                    style: const TextStyle(
-                                        fontSize: 20,
-                                        fontWeight: FontWeight.bold)),
-                                Text(type, style: const TextStyle(fontSize: 13))
-                              ])))));
-        }).toList()),
-      ],
-      const SizedBox(height: 24),
-      Align(
-          alignment: Alignment.center,
-          child: SizedBox(
-              width: 440,
-              child: FilledButton(
-                  onPressed: busy
-                      ? null
-                      : (mode == 'attendance' ? _lookup : _lookupLeave),
-                  child: Text(busy
-                      ? '확인 중…'
-                      : (mode == 'attendance' ? '직원 확인' : '직원 확인'))))),
-    ];
+                            Text(
+                                mode == 'attendance'
+                                    ? '전화번호 뒷 4자리'
+                                    : '전화번호 뒷 8자리',
+                                style: const TextStyle(
+                                    color: Color(0xff6b7684),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Text(
+                                activePhone.text.isEmpty
+                                    ? '숫자를 입력해 주세요'
+                                    : activePhone.text,
+                                style: TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.bold,
+                                    color: activePhone.text.isEmpty
+                                        ? const Color(0xff8b95a1)
+                                        : const Color(0xff191f28)))
+                          ])),
+                      const Icon(Icons.dialpad_rounded,
+                          color: Color(0xff3182f6))
+                    ]))),
+            if (mode == 'leave') ...[
+              const SizedBox(height: 20),
+              InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  splashColor: const Color(0x1A3182f6),
+                  highlightColor: const Color(0x143182f6),
+                  onTapDown: (_) async {
+                    HapticFeedback.lightImpact();
+                    final picked = await showDatePicker(
+                        context: context,
+                        firstDate: DateTime.now(),
+                        lastDate: DateTime.now().add(const Duration(days: 365)),
+                        initialDate:
+                            DateTime.now().add(const Duration(days: 1)));
+                    if (picked != null)
+                      setState(() => date.text =
+                          picked.toIso8601String().substring(0, 10));
+                  },
+                  child: Container(
+                      height: 70,
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      decoration: BoxDecoration(
+                          color: const Color(0xfffbfcfe),
+                          border: Border.all(color: const Color(0xffdfe5ec)),
+                          borderRadius: BorderRadius.circular(16)),
+                      child: Row(children: [
+                        Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                              const Text('휴가 날짜',
+                                  style: TextStyle(
+                                      color: Color(0xff6b7684),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold)),
+                              Text(
+                                  date.text.isEmpty ? '날짜를 선택해 주세요' : date.text,
+                                  style: const TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold))
+                            ])),
+                        const Icon(Icons.calendar_month_rounded)
+                      ]))),
+              const SizedBox(height: 20),
+              const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('휴가 종류',
+                      style: TextStyle(fontWeight: FontWeight.bold))),
+              Row(
+                  children: ['연차', '오전 반차', '오후 반차'].map<Widget>((type) {
+                final selected = leaveType == type;
+                final amount = type == '연차' ? '1일' : '0.5일';
+                return Expanded(
+                    child: Padding(
+                        padding: const EdgeInsets.only(right: 10),
+                        child: SizedBox(
+                            height: 82,
+                            child: FilledButton(
+                                onPressed: () =>
+                                    setState(() => leaveType = type),
+                                style: FilledButton.styleFrom(
+                                    elevation: selected ? 5 : 0,
+                                    backgroundColor: selected
+                                        ? const Color(0xffeaf3ff)
+                                        : Colors.white,
+                                    foregroundColor: selected
+                                        ? const Color(0xff2877dc)
+                                        : const Color(0xff6b7684),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                        side: BorderSide(
+                                            color: selected
+                                                ? const Color(0xff3182f6)
+                                                : const Color(0xffdfe5ec),
+                                            width: selected ? 2 : 1))),
+                                child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(amount,
+                                          style: const TextStyle(
+                                              fontSize: 20,
+                                              fontWeight: FontWeight.bold)),
+                                      Text(type,
+                                          style: const TextStyle(fontSize: 13))
+                                    ])))));
+              }).toList()),
+            ],
+            const SizedBox(height: 24),
+            Align(
+                alignment: Alignment.center,
+                child: SizedBox(
+                    width: 440,
+                    child: FilledButton(
+                        onPressed: busy
+                            ? null
+                            : (mode == 'attendance' ? _lookup : _lookupLeave),
+                        child: Text(busy
+                            ? '확인 중…'
+                            : (mode == 'attendance' ? '직원 확인' : '직원 확인'))))),
+          ];
     final identity = Container(
         width: 360,
         padding: const EdgeInsets.all(44),
@@ -1068,7 +1473,9 @@ class _TabletShellState extends State<TabletShell> {
                   ? '빠르고 정확한\n직원 출퇴근'
                   : mode == 'leave'
                       ? '간편한\n휴가 신청'
-                      : '휴대폰으로\nQR 출퇴근',
+                      : mode == 'daily'
+                          ? '간편하고 안전한\n단기직원 출퇴근'
+                          : '휴대폰으로\nQR 출퇴근',
               style: const TextStyle(
                   color: Colors.white,
                   fontSize: 38,
@@ -1166,6 +1573,29 @@ class _TabletShellState extends State<TabletShell> {
                                                     size: 20),
                                                 SizedBox(width: 7),
                                                 Text('휴가 신청')
+                                              ])))),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                  child: FilledButton(
+                                      onPressed: () => _selectMode('daily'),
+                                      style: FilledButton.styleFrom(
+                                          elevation: 0,
+                                          backgroundColor: mode == 'daily'
+                                              ? Colors.white
+                                              : Colors.transparent,
+                                          foregroundColor: mode == 'daily'
+                                              ? const Color(0xff3182f6)
+                                              : const Color(0xff6b7684),
+                                          minimumSize: const Size(0, 60)),
+                                      child: const FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(Icons.badge_outlined,
+                                                    size: 20),
+                                                SizedBox(width: 7),
+                                                Text('단기직원')
                                               ])))),
                               const SizedBox(width: 6),
                               Expanded(
