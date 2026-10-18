@@ -4,6 +4,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timefit_tablet/main.dart';
 
 void main() {
+  test('ships with the production RPC connection by default', () {
+    expect(supabaseUrl, 'https://xzcvgxnhospcedeebnsf.supabase.co');
+    expect(supabasePublishableKey, startsWith('sb_publishable_'));
+    expect(supabasePublishableKey, isNotEmpty);
+  });
+
   testWidgets('renders native tablet setup', (tester) async {
     SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(const TimeFitTabletApp());
@@ -28,11 +34,13 @@ void main() {
     expect(find.text('TimeFit 태블릿 연결'), findsNothing);
   });
 
-  test('builds the mobile attendance deep link without changing the QR token',
-      () {
-    expect(
-      mobileAttendanceQrUrl('fixed-token'),
-      'https://timefit-mobile.vercel.app/?qr=fixed-token#attendance',
-    );
-  });
+  test(
+    'builds the mobile attendance deep link without changing the QR token',
+    () {
+      expect(
+        mobileAttendanceQrUrl('fixed-token'),
+        'https://timefit-mobile.vercel.app/?qr=fixed-token#attendance',
+      );
+    },
+  );
 }

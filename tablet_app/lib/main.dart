@@ -6,8 +6,19 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-const supabaseUrl = String.fromEnvironment('SUPABASE_URL');
-const supabasePublishableKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+// The store tablet is a production-only client. Keep safe production defaults
+// so a plain `flutter build apk` cannot silently produce an app that renders
+// its UI but is unable to call employee/QR RPCs. Both values are public client
+// configuration; --dart-define can still override them for local or staging
+// builds.
+const supabaseUrl = String.fromEnvironment(
+  'SUPABASE_URL',
+  defaultValue: 'https://xzcvgxnhospcedeebnsf.supabase.co',
+);
+const supabasePublishableKey = String.fromEnvironment(
+  'SUPABASE_ANON_KEY',
+  defaultValue: 'sb_publishable__oqmG_YzWpQGtm-RZRWIVQ_Ji1JtHLH',
+);
 const mobileAppUrl = String.fromEnvironment(
   'MOBILE_APP_URL',
   defaultValue: 'https://timefit-mobile.vercel.app/',
@@ -20,7 +31,6 @@ String mobileAttendanceQrUrl(String qrToken) {
     fragment: 'attendance',
   ).toString();
 }
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   if (supabaseUrl.isNotEmpty && supabasePublishableKey.isNotEmpty) {

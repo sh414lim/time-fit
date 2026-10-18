@@ -23,4 +23,5 @@
 
 - 현재 APK는 테스트용 빌드입니다.
 - Google Play 배포용 서명 키와 스토어 등록은 별도 작업이 필요합니다.
-- Supabase URL과 publishable/anon key가 포함된 환경으로 빌드해야 실제 연결됩니다.
+- 운영 Supabase 공개 연결값은 앱 기본값에 포함됩니다. 스테이징 빌드는
+  `--dart-define`으로 URL과 publishable key를 반드시 덮어씁니다.
