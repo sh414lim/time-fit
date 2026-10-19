@@ -66,10 +66,31 @@ export function timefitAxConfigured() {
   return Boolean(process.env.TIMEFIT_AX_URL && process.env.TIMEFIT_AX_ALLOWED_HOSTS && process.env.TIMEFIT_AX_TRANSPORT_KEY?.length >= 32);
 }
 
-function encodedStoragePath(path) {
-  const value = String(path || '').replace(/^\/+/, '');
-  if (!value || value.split('/').some(part => !part || part === '.' || part === '..')) throw new Error('timefit_ax_storage_path_invalid');
-  return value.split('/').map(encodeURIComponent).join('/');
+export function encodedStoragePath(path, { supabaseUrl = process.env.SUPABASE_URL } = {}) {
+  let value = String(path || '').trim().replace(/\\/g, '/');
+  let isEncodedUrlPath = false;
+  if (/^https?:\/\//i.test(value)) {
+    if (/(?:^|\/)(?:\.{1,2}|%2e(?:%2e)?)(?:\/|%2f|$)/i.test(value)) throw new Error('timefit_ax_storage_path_invalid');
+    let url;
+    try { url = new URL(value); } catch { throw new Error('timefit_ax_storage_path_invalid'); }
+    let expectedOrigin;
+    try { expectedOrigin = new URL(String(supabaseUrl || '')).origin; } catch { throw new Error('timefit_ax_storage_path_invalid'); }
+    if (url.origin !== expectedOrigin) throw new Error('timefit_ax_storage_path_invalid');
+    const prefix = new RegExp(`^/storage/v1/object/(?:authenticated|public|sign)/${STORAGE_BUCKET}/`);
+    const match = url.pathname.match(prefix);
+    if (!match) throw new Error('timefit_ax_storage_path_invalid');
+    value = url.pathname.slice(match[0].length);
+    isEncodedUrlPath = true;
+  }
+  value = value.replace(/^\/+/, '');
+  if (value.startsWith(`${STORAGE_BUCKET}/`)) value = value.slice(STORAGE_BUCKET.length + 1);
+  let parts = value.split('/').filter(Boolean);
+  if (isEncodedUrlPath) {
+    try { parts = parts.map(part => decodeURIComponent(part)); } catch { throw new Error('timefit_ax_storage_path_invalid'); }
+  }
+  if (!parts.length || parts.some(part => part === '.' || part === '..')) throw new Error('timefit_ax_storage_path_invalid');
+  if (parts.some(part => part.includes('/') || part.includes('\\'))) throw new Error('timefit_ax_storage_path_invalid');
+  return parts.map(encodeURIComponent).join('/');
 }
 
 function absoluteSignedUrl(value) {

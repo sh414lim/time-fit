@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { extractReceiptWithTimefitAx, normalizeTimefitAxExtraction, resolveTimefitAxUrl } from '../server/api/_timefit-ax.js';
+import { encodedStoragePath, extractReceiptWithTimefitAx, normalizeTimefitAxExtraction, resolveTimefitAxUrl } from '../server/api/_timefit-ax.js';
 
 function withAxUrl(value, callback) {
   const previous = process.env.TIMEFIT_AX_URL;
@@ -49,6 +49,18 @@ test('Timefit AX URL rejects credentials, query strings, and fragments', () => {
       assert.throws(resolveTimefitAxUrl, /timefit_ax_url_invalid/);
     });
   }
+});
+
+test('Supabase 영수증 저장 경로의 중복 구분자와 전체 URL을 안전하게 정규화한다', () => {
+  const options = { supabaseUrl: 'https://project.supabase.co' };
+  assert.equal(encodedStoragePath('/org//staff/session/01-영수증 사진.png', options), 'org/staff/session/01-%EC%98%81%EC%88%98%EC%A6%9D%20%EC%82%AC%EC%A7%84.png');
+  assert.equal(encodedStoragePath('timefit-finance-documents/org/staff/receipt.jpg', options), 'org/staff/receipt.jpg');
+  assert.equal(encodedStoragePath('https://project.supabase.co/storage/v1/object/authenticated/timefit-finance-documents/org/staff/receipt.jpg?token=test', options), 'org/staff/receipt.jpg');
+  assert.equal(encodedStoragePath('https://project.supabase.co/storage/v1/object/authenticated/timefit-finance-documents/org/staff/%EC%98%81%EC%88%98%EC%A6%9D.jpg', options), 'org/staff/%EC%98%81%EC%88%98%EC%A6%9D.jpg');
+  assert.throws(() => encodedStoragePath('https://attacker.example/receipt.jpg', options), /storage_path_invalid/);
+  assert.throws(() => encodedStoragePath('https://project.supabase.co/not-storage/receipt.jpg', options), /storage_path_invalid/);
+  assert.throws(() => encodedStoragePath('https://project.supabase.co/storage/v1/object/authenticated/timefit-finance-documents/org/%2E%2E/receipt.jpg', options), /storage_path_invalid/);
+  assert.throws(() => encodedStoragePath('org/../receipt.jpg', options), /storage_path_invalid/);
 });
 
 test('Timefit AX extraction is normalized for the existing receipt pipeline', () => {
