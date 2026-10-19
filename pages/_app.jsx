@@ -18,6 +18,7 @@ import '../src/monthly-schedule-editor.css';
 import '../src/features/operations/operations.css';
 import '../src/manager-sidebar.css';
 import '../src/expense-workspace.css';
+import '../src/short-term-workers.css';
 
 export default function TimeFitApp({ Component, pageProps }) {
   return <Component {...pageProps} />;

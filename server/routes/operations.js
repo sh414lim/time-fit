@@ -5,6 +5,7 @@ import pushNotificationWorker from '../api/push-notification-worker.js';
 import sendSettlementEmail from '../api/send-settlement-email.js';
 import staffSensitiveProfile from '../api/staff-sensitive-profile.js';
 import dailyWorkerAttendance from '../api/daily-worker-attendance.js';
+import shortTermWorkerDetails from '../api/short-term-worker-details.js';
 
 export const operationRoutes = Object.freeze({
   'check-attendance-alerts': checkAttendanceAlerts,
@@ -14,4 +15,5 @@ export const operationRoutes = Object.freeze({
   'send-settlement-email': sendSettlementEmail,
   'staff-sensitive-profile': staffSensitiveProfile,
   'daily-worker-attendance': dailyWorkerAttendance,
+  'short-term-worker-details': shortTermWorkerDetails,
 });

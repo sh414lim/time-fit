@@ -60,7 +60,9 @@ test('출근 API는 주민번호를 암호화하고 service-role RPC만 호출�
   const calls = [];
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     calls.push({ url: String(url), options });
-    return jsonResponse({ action: 'check_in', employeeName: '테스트직원' });
+    return String(url).includes('/rpc/')
+      ? jsonResponse({ action: 'check_in', employeeName: '테스트직원', workerId: '123e4567-e89b-42d3-a456-426614174000' })
+      : jsonResponse({});
   });
   const res = responseRecorder();
   await handler({ method: 'POST', body: {
@@ -69,11 +71,14 @@ test('출근 API는 주민번호를 암호화하고 service-role RPC만 호출�
     privacyConsent: true,
   } }, res);
   assert.equal(res.statusCode, 200);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   assert.match(calls[0].url, /timefit_user_daily_worker_check_in$/);
   const rpc = JSON.parse(calls[0].options.body);
   assert.equal(rpc.p_resident_ciphertext.includes('9001011234567'), false);
   assert.match(rpc.p_resident_hmac, /^[0-9a-f]{64}$/);
+  assert.match(calls[1].url, /timefit_user_short_term_workers\?id=eq\./);
+  assert.equal(calls[1].options.method, 'PATCH');
+  assert.equal(calls[1].options.body.includes('01012345678'), false);
   assert.equal(JSON.stringify(res.body).includes('9001011234567'), false);
 });
 
@@ -85,4 +90,5 @@ test('태블릿 앱과 API 라우터에 단기직원 흐름이 연결된다', ()
   assert.match(app, /\/api\/daily-worker-attendance/);
   assert.match(app, /개인정보 수집·이용에 동의합니다/);
   assert.match(routes, /'daily-worker-attendance': dailyWorkerAttendance/);
+  assert.match(routes, /'short-term-worker-details': shortTermWorkerDetails/);
 });

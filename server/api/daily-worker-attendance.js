@@ -79,6 +79,15 @@ async function callRpc(name, body) {
   return payload;
 }
 
+async function storeEncryptedPhone(workerId, phoneDigits) {
+  const response = await fetch(`${process.env.SUPABASE_URL}/rest/v1/timefit_user_short_term_workers?id=eq.${encodeURIComponent(workerId)}`, {
+    method: 'PATCH',
+    headers: { ...serviceHeaders(), Prefer: 'return=minimal' },
+    body: JSON.stringify({ encrypted_phone_number: encryptSecret(phoneDigits) }),
+  });
+  if (!response.ok) throw new Error('daily_worker_secure_storage_unavailable');
+}
+
 export default async function handler(req, res) {
   res.setHeader?.('Cache-Control', 'no-store');
   if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'method_not_allowed' });
@@ -114,6 +123,7 @@ export default async function handler(req, res) {
         p_policy_version: POLICY_VERSION,
         p_request_key: requestKey,
       });
+      await storeEncryptedPhone(data?.workerId, phone.digits);
     } else {
       data = await callRpc('timefit_user_daily_worker_check_out', {
         p_device_token: deviceToken,
