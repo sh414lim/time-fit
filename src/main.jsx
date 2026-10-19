@@ -5052,6 +5052,29 @@ function Payroll({
       })),
     [rows, source, month],
   );
+  const payrollGroups = useMemo(
+    () =>
+      [
+        ["hourly", "시급제"],
+        ["daily", "일급제"],
+        ["monthly", "월급제"],
+        ["annual", "연봉제"],
+      ]
+        .map(([payType, label]) => {
+          const staff = rows.filter((row) => row.payType === payType);
+          return {
+            payType,
+            label,
+            staff,
+            total: staff.reduce(
+              (sum, row) => sum + Number(row.estimatedTotal || 0),
+              0,
+            ),
+          };
+        })
+        .filter((group) => group.staff.length),
+    [rows],
+  );
   const total = rows.reduce((sum, row) => sum + row.estimatedTotal, 0);
   const missingCheckoutIssues = useMemo(() => {
     const range = payrollAttendanceRange(month, currentKoreanDateKey());
@@ -5483,8 +5506,17 @@ function Payroll({
         </div>
         {loading ? (
           <LoadingBar label="급여 계약과 근태를 불러오는 중…" />
-        ) : rows.length ? (
-          rows.map((row) => (
+        ) : payrollGroups.length ? (
+          payrollGroups.map((group) => (
+            <section
+              className="staff-type-group payroll-type-group"
+              key={group.payType}
+            >
+              <div className="staff-type-heading payroll-type-heading">
+                <b>{group.label}</b>
+                <span>{group.staff.length}명 · {formatMoney(group.total)}</span>
+              </div>
+              {group.staff.map((row) => (
             <div
               className="salary-row clickable-row"
               key={row.staffId}
@@ -5531,7 +5563,9 @@ function Payroll({
               >
                 개별 PDF
               </button>
-            </div>
+                </div>
+              ))}
+            </section>
           ))
         ) : (
           <div className="empty-schedule">

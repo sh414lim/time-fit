@@ -2,7 +2,9 @@
 .staff-type-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 10px; background: #f2f7ff; color: #2176e8; }
 .staff-type-heading b { font-size: 14px; }
 .staff-type-heading span { font-size: 11px; font-weight: 800; }
-.staff-type-group .employee-row:first-of-type { border-top: 0; }
+.staff-type-group .employee-row:first-of-type,
+.staff-type-group .salary-row:first-of-type { border-top: 0; }
+.payroll-type-heading span { color: #4e5968; }
 .employee-name-line { display: flex; align-items: center; gap: 8px; }
 .employee-order-controls { display: inline-flex; gap: 4px; }
 .employee-order-controls button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid #dfe5ec; border-radius: 7px; background: #fff; color: #3182f6; font-size: 13px; line-height: 1; cursor: pointer; }
