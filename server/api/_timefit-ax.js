@@ -96,14 +96,34 @@ export function encodedStoragePath(path, { supabaseUrl = process.env.SUPABASE_UR
 export function receiptSourcePages(document, pages = []) {
   const sourcePages = Array.isArray(pages) && pages.length
     ? pages
-    : [{ storage_path: document?.storage_path, mime_type: document?.mime_type, page_number: 1 }];
+    : [{ ...document, page_number: 1 }];
   return sourcePages.map((page, index) => {
     const pageNumber = Number(page?.page_number || index + 1);
+    const storageProvider = String(page?.storage_provider || document?.storage_provider || 'supabase');
     const storagePath = String(page?.storage_path || '').trim()
       || (pageNumber === 1 ? String(document?.storage_path || '').trim() : '');
-    if (!storagePath) throw new Error('receipt_storage_path_missing');
-    return { ...page, storage_path: storagePath, mime_type: page?.mime_type || document?.mime_type || null };
+    const externalFileId = String(page?.external_file_id || '').trim()
+      || (pageNumber === 1 ? String(document?.external_file_id || '').trim() : '');
+    const externalUrl = String(page?.external_url || '').trim()
+      || (pageNumber === 1 ? String(document?.external_url || '').trim() : '');
+    if (storageProvider === 'google_drive') {
+      if (!externalFileId) throw new Error('receipt_drive_file_id_missing');
+    } else if (!storagePath) throw new Error('receipt_storage_path_missing');
+    return {
+      ...page,
+      storage_provider: storageProvider,
+      storage_path: storagePath || null,
+      external_file_id: externalFileId || null,
+      external_url: externalUrl || null,
+      mime_type: page?.mime_type || document?.mime_type || null,
+    };
   });
+}
+
+export function googleDriveReceiptUrl(fileId) {
+  const value = String(fileId || '').trim();
+  if (!/^[A-Za-z0-9_-]{10,200}$/.test(value)) throw new Error('receipt_drive_file_id_invalid');
+  return `https://drive.usercontent.google.com/download?id=${encodeURIComponent(value)}&export=download`;
 }
 
 function absoluteSignedUrl(value) {
@@ -194,11 +214,18 @@ async function readAxPayload(response) {
   try { return text ? JSON.parse(text) : {}; } catch { throw new Error('timefit_ax_response_invalid'); }
 }
 
-export async function extractReceiptWithTimefitAx({ organizationId, documentId, runId, requestId: suppliedRequestId, storagePaths }) {
+export async function extractReceiptWithTimefitAx({ organizationId, documentId, runId, requestId: suppliedRequestId, storagePaths, sources }) {
   if (!timefitAxConfigured()) throw new Error('timefit_ax_not_configured');
-  if (!Array.isArray(storagePaths) || !storagePaths.length || storagePaths.length > 20) throw new Error('timefit_ax_images_invalid');
+  const sourceItems = Array.isArray(sources)
+    ? sources
+    : Array.isArray(storagePaths) ? storagePaths.map(storagePath => ({ storage_provider: 'supabase', storage_path: storagePath })) : [];
+  if (!sourceItems.length || sourceItems.length > 20) throw new Error('timefit_ax_images_invalid');
   const imageUrls = [];
-  for (const storagePath of storagePaths) imageUrls.push(await createTimefitAxSignedUrl(storagePath));
+  for (const source of sourceItems) {
+    imageUrls.push(source?.storage_provider === 'google_drive'
+      ? googleDriveReceiptUrl(source.external_file_id)
+      : await createTimefitAxSignedUrl(source?.storage_path));
+  }
   const requestId = normalizedRequestId(suppliedRequestId || `receipt:${documentId}:${runId}`, documentId);
   const response = await fetch(`${resolveTimefitAxUrl()}/api/timefit/v1/receipt-sessions`, {
     method: 'POST', redirect: 'error',

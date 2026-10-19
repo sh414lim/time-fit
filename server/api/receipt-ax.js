@@ -26,20 +26,20 @@ export default async function handler(req, res) {
   let authorized = false;
   try {
     const requestId = normalizedRequestId(req.body?.requestId, documentId);
-    const documents = await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}&organization_id=eq.${encodeURIComponent(organizationId)}&document_type=eq.receipt&select=id,organization_id,uploaded_by,cost_center_id,extracted_data,storage_path,mime_type,processing_status,review_status`);
+    const documents = await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}&organization_id=eq.${encodeURIComponent(organizationId)}&document_type=eq.receipt&select=id,organization_id,uploaded_by,cost_center_id,extracted_data,storage_provider,storage_path,external_file_id,external_url,mime_type,processing_status,review_status`);
     document = documents[0];
     if (!document) return res.status(404).json({ ok: false, error: '영수증 문서를 찾을 수 없습니다.' });
     const auth = await authorizeDocument(req, document);
     if (!auth) return res.status(req.headers.authorization ? 403 : 401).json({ ok: false, error: '영수증 분석 권한이 없습니다.' });
     authorized = true;
     if (FINAL_REVIEW_STATES.has(document.review_status)) return res.status(409).json({ ok: false, error: '검토가 종료된 영수증은 다시 분석할 수 없습니다.' });
-    const pages = await financeRest(`timefit_user_finance_document_pages?document_id=eq.${encodeURIComponent(documentId)}&select=storage_path,mime_type&page_number=not.is.null&order=page_number.asc`);
+    const pages = await financeRest(`timefit_user_finance_document_pages?document_id=eq.${encodeURIComponent(documentId)}&select=storage_provider,storage_path,external_file_id,external_url,mime_type,page_number&page_number=not.is.null&order=page_number.asc`);
     const sourcePages = receiptSourcePages(document, pages);
     if (sourcePages.some(page => !String(page.mime_type || '').startsWith('image/'))) return res.status(400).json({ ok: false, error: '이미지 영수증만 분석할 수 있습니다.' });
     await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}&organization_id=eq.${encodeURIComponent(organizationId)}`, {
       method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ processing_status: 'processing', processing_error: null }),
     });
-    const result = await extractReceiptWithTimefitAx({ organizationId, documentId, requestId, storagePaths: sourcePages.map(page => page.storage_path) });
+    const result = await extractReceiptWithTimefitAx({ organizationId, documentId, requestId, sources: sourcePages });
     const currentAuth = await authorizeDocument(req, document);
     if (!currentAuth) { const error = new Error('timefit_ax_authorization_revoked'); error.status = 403; throw error; }
     const extraction = { ...result.extracted, rawText: result.rawText, axRequestId: result.requestId, imageContentSha256: result.imageContentSha256 };

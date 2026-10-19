@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { encodedStoragePath, extractReceiptWithTimefitAx, normalizeTimefitAxExtraction, receiptSourcePages, resolveTimefitAxUrl } from '../server/api/_timefit-ax.js';
+import { encodedStoragePath, extractReceiptWithTimefitAx, googleDriveReceiptUrl, normalizeTimefitAxExtraction, receiptSourcePages, resolveTimefitAxUrl } from '../server/api/_timefit-ax.js';
 
 function withAxUrl(value, callback) {
   const previous = process.env.TIMEFIT_AX_URL;
@@ -69,11 +69,29 @@ test('첫 페이지 경로가 비어 있으면 문서 원본 경로를 사용한
     page_number: 1,
     storage_path: 'org/staff/session/01-receipt.jpg',
     mime_type: 'image/jpeg',
+    storage_provider: 'supabase',
+    external_file_id: null,
+    external_url: null,
   }]);
   assert.throws(() => receiptSourcePages(document, [
     { page_number: 1, storage_path: null, mime_type: 'image/jpeg' },
     { page_number: 2, storage_path: null, mime_type: 'image/jpeg' },
   ]), /receipt_storage_path_missing/);
+});
+
+test('Google Drive 영수증은 검증된 파일 ID로 다운로드 URL을 생성한다', () => {
+  const document = {
+    storage_provider: 'google_drive',
+    storage_path: null,
+    external_file_id: '1qNMGfWDoTQpWEu1uW4gyMiVXAEaXmY7z',
+    external_url: 'https://drive.google.com/file/d/1qNMGfWDoTQpWEu1uW4gyMiVXAEaXmY7z/view',
+    mime_type: 'image/jpeg',
+  };
+  const [source] = receiptSourcePages(document, []);
+  assert.equal(source.storage_provider, 'google_drive');
+  assert.equal(source.external_file_id, document.external_file_id);
+  assert.equal(googleDriveReceiptUrl(source.external_file_id), 'https://drive.usercontent.google.com/download?id=1qNMGfWDoTQpWEu1uW4gyMiVXAEaXmY7z&export=download');
+  assert.throws(() => googleDriveReceiptUrl('https://attacker.example/file'), /drive_file_id_invalid/);
 });
 
 test('Timefit AX extraction is normalized for the existing receipt pipeline', () => {

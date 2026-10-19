@@ -125,7 +125,7 @@ export async function processReceiptRun({ organizationId, documentId, runId }) {
     if (!timefitAxConfigured()) throw new Error('timefit_ax_not_configured');
     const axResult = await extractReceiptWithTimefitAx({
       organizationId, documentId, runId,
-      storagePaths: sourcePages.map(page => page.storage_path),
+      sources: sourcePages,
     });
     const text = axResult.rawText;
     let extracted = { ...axResult.extracted, imageContentSha256: axResult.imageContentSha256, axRequestId: axResult.requestId };
