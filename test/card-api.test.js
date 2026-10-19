@@ -143,7 +143,7 @@ test('영수증과 카드 거래의 강한 식별자를 점수화한다', () => 
 
 test('영수증 재분석은 동시 실행·최대 횟수·원장 중복을 차단한다', () => {
   assert.equal(receiptRetryBlocker([{ status: 'processing' }], false), 'processing');
-  assert.equal(receiptRetryBlocker(Array.from({ length: 5 }, () => ({ status: 'failed' })), false), 'limit');
+  assert.equal(receiptRetryBlocker(Array.from({ length: 10 }, () => ({ status: 'failed' })), false), 'limit');
   assert.equal(receiptRetryBlocker([{ status: 'failed' }], true), 'already_processed');
   assert.equal(receiptRetryBlocker([{ status: 'failed' }], false), null);
 });

@@ -6,6 +6,8 @@ import { receiptValidation } from '../domain/receipt-validation.js';
 import { expenseAmountError } from '../domain/expense-amount-validation.js';
 import { findPriorMerchantClassification, inferExpenseCategory } from '../domain/expense-classification.js';
 
+const MAX_RECEIPT_PROCESSING_ATTEMPTS = 10;
+
 export const receiptFingerprint = receipt => {
   if (!receipt?.transactionDate || !Number.isFinite(Number(receipt.totalAmount))) return null;
   const merchantIdentity = String(receipt.merchantBusinessNumber || receipt.approvalNumber || receipt.merchantName || '').toLowerCase().replace(/[^0-9a-z가-힣]/g, '');
@@ -38,7 +40,7 @@ export const matchScore = (receipt, transaction) => {
 
 export function receiptRetryBlocker(previousRuns = [], hasExpenseSource = false) {
   if (previousRuns.some(run => ['queued','processing'].includes(run.status))) return 'processing';
-  if (previousRuns.length >= 5) return 'limit';
+  if (previousRuns.length >= MAX_RECEIPT_PROCESSING_ATTEMPTS) return 'limit';
   if (hasExpenseSource) return 'already_processed';
   return null;
 }
@@ -188,7 +190,7 @@ export async function recoverStaleReceiptRuns(organizationId) {
   const active = await financeRest(`timefit_user_expense_processing_runs?organization_id=eq.${encodeURIComponent(organizationId)}&status=in.(queued,processing)&select=id,document_id,status,attempt_count,created_at,started_at,claimed_at,heartbeat_at&order=created_at.asc&limit=100`);
   const stale = active.filter(run => isReceiptRunStale(run));
   for (const run of stale) {
-    if (Number(run.attempt_count || 0) >= 5) {
+    if (Number(run.attempt_count || 0) >= MAX_RECEIPT_PROCESSING_ATTEMPTS) {
       await finishRun(run.id, { status: 'failed', error_code: 'receipt_retry_limit' });
       await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(run.document_id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ processing_status: 'failed', review_status: 'submitter_review', processing_error: '자동 분석 재시도 횟수를 초과했습니다.', processed_at: new Date().toISOString() }) });
       continue;
@@ -197,20 +199,20 @@ export async function recoverStaleReceiptRuns(organizationId) {
     await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(run.document_id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ processing_status: 'queued', processing_error: null }) });
     scheduleBackground(() => processReceiptRun({ organizationId, documentId: run.document_id, runId: run.id }));
   }
-  return { scanned: active.length, recovered: stale.filter(run => Number(run.attempt_count || 0) < 5).length, failed: stale.filter(run => Number(run.attempt_count || 0) >= 5).length };
+  return { scanned: active.length, recovered: stale.filter(run => Number(run.attempt_count || 0) < MAX_RECEIPT_PROCESSING_ATTEMPTS).length, failed: stale.filter(run => Number(run.attempt_count || 0) >= MAX_RECEIPT_PROCESSING_ATTEMPTS).length };
 }
 
 async function enqueueRun({ organizationId, documentId, userId }) {
   const active = await financeRest(`timefit_user_expense_processing_runs?document_id=eq.${encodeURIComponent(documentId)}&status=in.(queued,processing)&select=id,status,attempt_count,created_at,started_at,claimed_at,heartbeat_at&limit=1`);
   if (active.length) {
-    if (isReceiptRunStale(active[0]) && Number(active[0].attempt_count || 0) < 5) {
+    if (isReceiptRunStale(active[0]) && Number(active[0].attempt_count || 0) < MAX_RECEIPT_PROCESSING_ATTEMPTS) {
       await financeRest(`timefit_user_expense_processing_runs?id=eq.${encodeURIComponent(active[0].id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'queued', error_code: 'stale_run_recovered', finished_at: null }) });
       return { run: { ...active[0], status: 'queued' }, duplicateRequest: false, recovered: true, shouldProcess: true };
     }
     return { run: active[0], duplicateRequest: true, shouldProcess: active[0].status === 'queued' };
   }
-  const recent = await financeRest(`timefit_user_expense_processing_runs?document_id=eq.${encodeURIComponent(documentId)}&select=id&order=created_at.desc&limit=5`);
-  if (recent.length >= 5) throw new Error('receipt_retry_limit');
+  const recent = await financeRest(`timefit_user_expense_processing_runs?document_id=eq.${encodeURIComponent(documentId)}&select=id&order=created_at.desc&limit=${MAX_RECEIPT_PROCESSING_ATTEMPTS}`);
+  if (recent.length >= MAX_RECEIPT_PROCESSING_ATTEMPTS) throw new Error('receipt_retry_limit');
   // These two field names are retained only for compatibility with the existing
   // database schema. Their values identify Timefit AX; no OCR engine is called.
   const rows = await financeRest('timefit_user_expense_processing_runs', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify([{ organization_id: organizationId, document_id: documentId, status: 'queued', ocr_provider: 'timefit_ax', ocr_model: 'codex-cli', extractor_version: 'receipt-v2', created_by: userId }]) });
