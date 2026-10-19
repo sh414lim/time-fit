@@ -1,0 +1,86 @@
+.short-term-worker-table tbody tr {
+  cursor: pointer;
+}
+
+.short-term-worker-table tbody tr:hover {
+  background: #f8fbff;
+}
+
+.short-term-worker-modal {
+  width: min(560px, 100%);
+}
+
+.short-term-worker-profile {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 16px;
+  border-radius: 15px;
+  background: #f7f9fc;
+}
+
+.short-term-worker-profile .avatar {
+  width: 42px;
+  height: 42px;
+}
+
+.short-term-worker-profile div {
+  display: grid;
+  gap: 4px;
+}
+
+.short-term-worker-profile b {
+  font-size: 17px;
+}
+
+.short-term-worker-profile span {
+  color: #8b95a1;
+  font-size: 12px;
+}
+
+.short-term-worker-detail-list {
+  display: grid;
+  gap: 0;
+  margin: 18px 0 0;
+}
+
+.short-term-worker-detail-list div {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 16px;
+  padding: 13px 2px;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.short-term-worker-detail-list dt {
+  color: #8b95a1;
+  font-size: 13px;
+}
+
+.short-term-worker-detail-list dd {
+  margin: 0;
+  color: #333d4b;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.short-term-worker-sensitive-note {
+  margin: 16px 0 0;
+  color: #8b95a1;
+  font-size: 11px;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .short-term-worker-table th:nth-child(3),
+  .short-term-worker-table td:nth-child(3),
+  .short-term-worker-table th:nth-child(6),
+  .short-term-worker-table td:nth-child(6) {
+    display: none;
+  }
+
+  .short-term-worker-detail-list div {
+    grid-template-columns: 110px 1fr;
+  }
+}
