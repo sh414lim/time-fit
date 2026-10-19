@@ -194,6 +194,30 @@ export async function loadWorkforce(organizationId) {
   return { staff: staffRows.map(item => ({ ...item, avatar_url: item.avatar_path ? avatarUrlByPath[item.avatar_path] || null : null, account: accounts[item.user_id], category: categoryById[item.category_id] || null })), schedules: scheduleResult.data ?? [], leaves: leaveResult.data ?? [], attendance: attendanceResult.data ?? [], settings: settingsResult.data, leaveGrants: grantsResult.data ?? [], categories };
 }
 
+async function shortTermWorkerRequest(organizationId, query = {}) {
+  const client = requireClient();
+  const { data: { session } } = await client.auth.getSession();
+  if (!session?.access_token) throw new Error('로그인이 필요합니다.');
+  const params = new URLSearchParams({ organizationId, ...query });
+  const response = await requestWithTimeout(fetch(`/api/short-term-worker-details?${params}`, {
+    cache: 'no-store',
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  }), 'short_term_worker_details');
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.ok) throw new Error(result.error || '단기직원 정보를 불러오지 못했습니다.');
+  return result.records ?? [];
+}
+
+export async function loadShortTermAttendance(organizationId, { from, to } = {}) {
+  return shortTermWorkerRequest(organizationId, { ...(from ? { from } : {}), ...(to ? { to } : {}) });
+}
+
+export async function loadShortTermWorkerDetail(organizationId, recordId) {
+  const records = await shortTermWorkerRequest(organizationId, { recordId });
+  if (!records[0]) throw new Error('단기직원 근무기록을 찾지 못했습니다.');
+  return records[0];
+}
+
 export async function loadStaffCategories(organizationId) {
   const { data, error } = await requireClient().from('timefit_user_staff_categories').select('id,name,color,sort_order').eq('organization_id', organizationId).order('sort_order').order('name');
   if (error) throw error;
