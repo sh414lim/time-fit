@@ -102,7 +102,25 @@ function absoluteSignedUrl(value) {
 }
 
 export async function createTimefitAxSignedUrl(storagePath, expiresIn = 600) {
-  const response = await fetch(`${process.env.SUPABASE_URL}/storage/v1/object/sign/${STORAGE_BUCKET}/${encodedStoragePath(storagePath)}`, {
+  let normalizedPath;
+  try {
+    normalizedPath = encodedStoragePath(storagePath);
+  } catch (error) {
+    const raw = String(storagePath || '').trim();
+    let parsed = null;
+    try { parsed = /^https?:\/\//i.test(raw) ? new URL(raw) : null; } catch { parsed = null; }
+    console.error('Timefit AX storage path rejected', {
+      empty: !raw,
+      length: raw.length,
+      isUrl: /^https?:\/\//i.test(raw),
+      hostname: parsed?.hostname || null,
+      pathnameRoot: parsed ? parsed.pathname.split('/').slice(0, 6).join('/') : null,
+      segmentCount: raw.replace(/^\/+/, '').split('/').filter(Boolean).length,
+      startsWithBucket: raw.replace(/^\/+/, '').startsWith(`${STORAGE_BUCKET}/`),
+    });
+    throw error;
+  }
+  const response = await fetch(`${process.env.SUPABASE_URL}/storage/v1/object/sign/${STORAGE_BUCKET}/${normalizedPath}`, {
     method: 'POST',
     headers: serviceHeaders(),
     body: JSON.stringify({ expiresIn }),
