@@ -195,7 +195,7 @@ export default function EmployeeReceiptSubmission({ organizationId, employee }) 
 
   if (!employee) return <section className="card full-card empty-schedule"><b>직원 연결이 필요해요.</b><span>관리자에게 현재 로그인 계정과 직원 정보를 연결해 달라고 요청해 주세요.</span></section>;
   return <>
-    <div className="page-title"><div><p>촬영하고 필요한 값만 확인</p><h1>내 영수증</h1><span>원본 저장 후 AX/OCR 분석, 지출 생성과 카드 대조가 백그라운드에서 진행됩니다.</span></div></div>
+    <div className="page-title"><div><p>촬영하고 필요한 값만 확인</p><h1>내 영수증</h1><span>원본 저장 후 Timefit AX 분석, 지출 생성과 카드 대조가 백그라운드에서 진행됩니다.</span></div></div>
     {reminders.some(item => item.status === 'sent') && <section className="receipt-reminder-panel"><div><b>제출하지 않은 영수증이 있어요</b><span>카드 사용 내역을 확인하고 해당 영수증을 촬영해 주세요.</span></div>{reminders.filter(item => item.status === 'sent').map(item => <button key={item.id} onClick={() => read(item)}><span>{item.message}</span><em>{item.reminder_number}차 알림 · 확인</em></button>)}</section>}
     {detail && <ReceiptCorrection detail={detail} centers={centers} busy={busy} onClose={() => setDetail(null)} onConfirm={confirm}/>}
     <section className="card full-card employee-receipt-card">

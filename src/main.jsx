@@ -364,7 +364,7 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
     ["sales.sync", "매출 동기화", "POS 내역 수집 실행"],
     ["finance.view", "지출·증빙 조회", "지출 원장·결산 열람"],
     ["expense.manage", "지출·증빙 관리", "지출 원장 수정"],
-    ["expense.receipt.review", "영수증 검수", "OCR 확인·수정 요청·승인"],
+    ["expense.receipt.review", "영수증 검수", "AX 확인·수정 요청·승인"],
     ["expense.card.manage", "법인카드 관리", "카드 연결·동기화"],
     ["expense.closeout.manage", "결산 관리", "기간 마감·재오픈"],
     ["expense.export", "지출 내보내기", "CSV·증빙 자료 다운로드"],
@@ -5608,7 +5608,7 @@ function ManagerReceiptUpload({ organizationId, onClose, onProcessed, onOpenRevi
       variant="manager-receipt-modal"
     >
       <p className="modal-text">
-        원본 등록 후 Timefit AX 또는 OCR 분석, 지출 생성, 카드 대조와 검토함 등록을 자동으로 시작합니다. Google Drive에도 원본을 백업합니다.
+        원본 등록 후 Timefit AX 분석, 지출 생성, 카드 대조와 검토함 등록을 자동으로 시작합니다. Google Drive에도 원본을 백업합니다.
       </p>
       {result ? (
         <div className="manager-receipt-success" role="status">

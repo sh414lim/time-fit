@@ -45,7 +45,7 @@ export default async function handler(req, res) {
     const extraction = { ...result.extracted, rawText: result.rawText, axRequestId: result.requestId, imageContentSha256: result.imageContentSha256 };
     await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}&organization_id=eq.${encodeURIComponent(organizationId)}`, {
       method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({
-        extracted_data: extraction, ocr_text: String(extraction.rawText || '').slice(0, 50000), processing_status: 'ready',
+        extracted_data: extraction, processing_status: 'ready',
         review_status: 'submitter_review', processing_error: null, document_date: extraction.transactionDate || null, processed_at: new Date().toISOString(),
       }),
     });

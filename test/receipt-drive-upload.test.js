@@ -54,3 +54,16 @@ test('Vercel Pages API는 AX 처리를 응답 전에 완료해 작업이 queued�
   assert.match(source, /await dispatchReceiptRun\(\{ organizationId, documentId, queued \}\)/);
   assert.doesNotMatch(source, /scheduleBackground\(\(\) => processReceiptRun\(\{ organizationId, documentId, runId: run\.id \}\)\)/);
 });
+
+test('영수증 분석은 Timefit AX만 사용하고 대체 인식 엔진을 호출하지 않는다', async () => {
+  const [processSource, environment, managerUi, employeeUi] = await Promise.all([
+    read('server/api/receipt-process.js'),
+    read('.env.example'),
+    read('src/main.jsx'),
+    read('src/features/finance/EmployeeReceiptSubmission.jsx'),
+  ]);
+  const userFacingSource = [environment, managerUi, employeeUi].join('\n');
+  assert.match(processSource, /extractReceiptWithTimefitAx/);
+  assert.doesNotMatch(userFacingSource, /GOOGLE_VISION|DOCUMENT_TEXT_DETECTION|\bOCR\b/i);
+  assert.doesNotMatch(processSource, /vision\.googleapis|GOOGLE_VISION|DOCUMENT_TEXT_DETECTION|extractReceiptWithLlm|timefit_ax_receipt_fallback/);
+});

@@ -15,7 +15,7 @@ const base64Url = (value: Uint8Array | string) => {
 }
 
 const decodeCredentials = () => {
-  const encoded = Deno.env.get('GOOGLE_DRIVE_CREDENTIALS_B64') || Deno.env.get('GOOGLE_VISION_CREDENTIALS_B64') || ''
+  const encoded = Deno.env.get('GOOGLE_DRIVE_CREDENTIALS_B64') || ''
   if (!encoded) throw new Error('google_drive_credentials_missing')
   try { return JSON.parse(atob(encoded)) as { client_email: string; private_key: string } }
   catch { throw new Error('google_drive_credentials_invalid') }

@@ -1,7 +1,7 @@
 import { isIP } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { serviceHeaders } from './_finance-server.js';
-import { validateReceiptExtraction } from './_receipt-llm.js';
+import { validateReceiptExtraction } from './_receipt-extraction.js';
 
 const STORAGE_BUCKET = 'timefit-finance-documents';
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);

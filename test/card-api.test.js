@@ -4,12 +4,12 @@ import cardConnections from '../server/api/card-connections.js';
 import cardConnectionReauth from '../server/api/card-connection-reauth.js';
 import cardSync from '../server/api/card-sync.js';
 import cardSyncWorker from '../server/api/card-sync-worker.js';
-import { matchScore, matchingClassificationRule, receiptFingerprint, receiptRetryBlocker, structuredReceipt } from '../server/api/receipt-process.js';
+import { matchScore, matchingClassificationRule, receiptFingerprint, receiptRetryBlocker } from '../server/api/receipt-process.js';
 import expenseReview, { eligibleBulkMatches } from '../server/api/expense-review.js';
 import { buildCloseoutCompleteness, buildDailyLaborMap, buildFinanceReport, buildMerchantExpenseGroups, compareFinanceReports, groupFinanceSeries, previousFinanceRange } from '../server/api/finance-report.js';
 import { findPriorMerchantClassification, inferExpenseCategory } from '../server/domain/expense-classification.js';
 import closeouts from '../server/api/closeouts.js';
-import { mergeReceiptExtractions, validateReceiptExtraction } from '../server/api/_receipt-llm.js';
+import { validateReceiptExtraction } from '../server/api/_receipt-extraction.js';
 import { buildExpenseExceptions } from '../server/api/expense-exceptions.js';
 import expenseReminderWorker, { dueReminderNumber } from '../server/api/expense-reminder-worker.js';
 import { analyzeReceiptPixels } from '../src/features/finance/receiptQuality.js';
@@ -132,16 +132,6 @@ test('예약 카드 동기화 워커는 비밀키가 없는 요청을 차단한�
   assert.equal(res.body.error, 'Unauthorized');
 });
 
-test('Google Vision 영수증 텍스트를 핵심 필드로 구조화한다', () => {
-  const receipt = structuredReceipt('타임핏 식자재마트\n사업자등록번호 123-45-67890\n2026-09-10 09:30\n카드번호 ****4821\n승인번호 100001\n결제금액 120,000');
-  assert.equal(receipt.merchantName, '타임핏 식자재마트');
-  assert.equal(receipt.transactionDate, '2026-09-10');
-  assert.equal(receipt.totalAmount, 120000);
-  assert.equal(receipt.merchantBusinessNumber, '123-45-67890');
-  assert.equal(receipt.approvalNumber, '100001');
-  assert.equal(receipt.cardLast4, '4821');
-});
-
 test('영수증과 카드 거래의 강한 식별자를 점수화한다', () => {
   const result = matchScore(
     { totalAmount: 120000, transactionDate: '2026-09-10', approvalNumber: '100001', cardLast4: '4821' },
@@ -190,7 +180,7 @@ test('비정상적으로 큰 확정 지출은 결산 합계에서 격리한다',
     salesRows: [{ sales_date: '2026-09-01', completed_amount: 1000000, completed_order_count: 10 }],
     expenses: [
       { id: 'normal', transaction_date: '2026-09-01', total_amount: 200000, category: '재료비' },
-      { id: 'ocr-outlier', transaction_date: '2026-09-01', total_amount: 16677165153195, category: null },
+      { id: 'ax-outlier', transaction_date: '2026-09-01', total_amount: 16677165153195, category: null },
     ],
   });
   assert.equal(report.totals.confirmedExpenses, 200000);
@@ -353,13 +343,11 @@ test('결산 확정 API는 로그인하지 않은 요청을 차단한다', async
   assert.equal(res.statusCode, 401);
 });
 
-test('LLM 영수증 JSON을 검증하고 규칙 기반 누락값을 병합한다', () => {
+test('AX 영수증 분석 결과를 검증하고 정규화한다', () => {
   const ai = validateReceiptExtraction({ merchantName: '식자재마트', transactionDate: '2026-09-10', transactionTime: '09:30', totalAmount: 110000, supplyAmount: 100000, vatAmount: 10000, merchantBusinessNumber: null, approvalNumber: '100001', cardLast4: '4821', category: '재료비', confidence: 0.94 });
-  const merged = mergeReceiptExtractions({ merchantName: null, transactionDate: null, totalAmount: 110000, merchantBusinessNumber: '123-45-67890', approvalNumber: null, cardLast4: null }, { data: ai });
-  assert.equal(merged.merchantBusinessNumber, '123-45-67890');
-  assert.equal(merged.category, '재료비');
-  assert.equal(merged.supplyAmount + merged.vatAmount, merged.totalAmount);
-  assert.equal(merged.extractionProvider, 'openai_structured_outputs');
+  assert.equal(ai.category, '재료비');
+  assert.equal(ai.supplyAmount + ai.vatAmount, ai.totalAmount);
+  assert.equal(ai.cardLast4, '4821');
 });
 
 test('공급가액과 부가세가 합계와 다르면 세부 금액을 폐기한다', () => {
@@ -373,11 +361,11 @@ test('파일이 달라도 같은 영수증 핵심값은 동일한 지문을 만�
   assert.equal(first, second); assert.equal(first.length, 64);
 });
 
-test('오래된 미증빙 거래와 OCR 실패를 긴급 예외로 우선 정렬한다', () => {
+test('오래된 미증빙 거래와 AX 실패를 긴급 예외로 우선 정렬한다', () => {
   const result = buildExpenseExceptions({
     now: new Date('2026-09-10T12:00:00Z'),
     transactions: [{ id: 'tx-1', approved_at: '2026-09-01T00:00:00Z', merchant_name: '식자재마트', net_amount: 120000, card: { nickname: '운영카드', last4: '4821' } }],
-    documents: [{ id: 'doc-1', title: '영수증', processing_status: 'failed', processing_error: 'vision_timeout', created_at: '2026-09-10T01:00:00Z' }],
+    documents: [{ id: 'doc-1', title: '영수증', processing_status: 'failed', processing_error: 'ax_timeout', created_at: '2026-09-10T01:00:00Z' }],
   });
   assert.equal(result.summary.critical, 2);
   assert.equal(result.items[0].severity, 'critical');

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { loadExpenseExceptions } from '../../lib/supabase';
 
-const labels = { all: '전체', missing_receipt: '미증빙 카드', receipt_review: '영수증 검토', ocr_failed: 'OCR 실패', card_connection: '카드 연결', closeout_draft: '결산' };
+const labels = { all: '전체', missing_receipt: '미증빙 카드', receipt_review: '영수증 검토', ax_failed: 'AX 실패', card_connection: '카드 연결', closeout_draft: '결산' };
 const targetSelector = { cards: '.corporate-card-workspace', connections: '.corporate-card-workspace', receipts: '.expense-review-queue', closeouts: '.finance-report-dashboard' };
 
 export default function ExpenseExceptionInbox({ organizationId, onNavigate, refreshToken = 0 }) {
