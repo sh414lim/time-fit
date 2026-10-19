@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {"name": "refresh-failure-enters-login", "initial": "authentication_required", "refresh": "failed", "expectedAction": "login"},
+    {"name": "replay-401-enters-login", "initial": "authentication_required", "refresh": "succeeded", "replay": "authentication_required", "expectedAction": "login"},
+    {"name": "replay-5xx-uses-normal-taxonomy", "initial": "authentication_required", "refresh": "succeeded", "replay": "internal_error", "expectedAction": "retry"},
+    {"name": "replay-rate-limit-uses-normal-taxonomy", "initial": "authentication_required", "refresh": "succeeded", "replay": "rate_limited", "expectedAction": "retry_after"},
+    {"name": "replay-success-completes", "initial": "authentication_required", "refresh": "succeeded", "replay": "success", "expectedAction": "success"},
+    {"name": "initial-5xx-does-not-refresh", "initial": "internal_error", "expectedAction": "retry"}
+  ]
+}

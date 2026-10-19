@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "scenarios": [
+    {
+      "name": "delayed-old-response-causes-dirty-rerun",
+      "initial": {"epoch": 7, "status": "active", "subscribed": true, "outboxRunning": true},
+      "steps": [
+        {"op": "event", "eventType": "conversation.updated"},
+        {"op": "event", "eventType": "conversation.updated"},
+        {"op": "response", "epoch": 7, "canonical": {"status": "archived", "title": "old"}},
+        {"op": "response", "epoch": 7, "canonical": {"status": "active", "title": "current"}}
+      ],
+      "expected": {"epoch": 7, "status": "active", "title": "current", "inFlight": false, "dirty": false, "appliedResponses": 2, "discardedResponses": 0}
+    },
+    {
+      "name": "archive-unarchive-events-arrive-in-reverse-order",
+      "initial": {"epoch": 3, "status": "archived", "subscribed": true, "outboxRunning": true},
+      "steps": [
+        {"op": "event", "eventType": "conversation.updated"},
+        {"op": "event", "eventType": "conversation.archived"},
+        {"op": "response", "epoch": 3, "canonical": {"status": "active", "title": "canonical"}},
+        {"op": "response", "epoch": 3, "canonical": {"status": "active", "title": "canonical"}}
+      ],
+      "expected": {"epoch": 3, "status": "active", "title": "canonical", "inFlight": false, "dirty": false, "appliedResponses": 2, "discardedResponses": 0}
+    },
+    {
+      "name": "purge-discards-delayed-success",
+      "initial": {"epoch": 11, "status": "active", "subscribed": true, "outboxRunning": true},
+      "steps": [
+        {"op": "event", "eventType": "conversation.updated"},
+        {"op": "membership_lost"},
+        {"op": "response", "epoch": 11, "canonical": {"status": "active", "title": "must-not-return"}}
+      ],
+      "expected": {"epoch": 12, "purged": true, "localConversation": null, "subscribed": false, "outboxRunning": false, "inFlight": false, "dirty": false, "appliedResponses": 0, "discardedResponses": 1}
+    }
+  ]
+}
