@@ -1,7 +1,7 @@
 import { after } from 'next/server.js';
 import { createHash } from 'node:crypto';
 import { authorizeFinance, authorizeOrganizationMember, canAccessFinanceCostCenter, financeError, financeRest, financeServerConfigured, methodNotAllowed } from './_finance-server.js';
-import { extractReceiptWithTimefitAx, timefitAxConfigured } from './_timefit-ax.js';
+import { extractReceiptWithTimefitAx, receiptSourcePages, timefitAxConfigured } from './_timefit-ax.js';
 import { receiptValidation } from '../domain/receipt-validation.js';
 import { expenseAmountError } from '../domain/expense-amount-validation.js';
 import { findPriorMerchantClassification, inferExpenseCategory } from '../domain/expense-classification.js';
@@ -120,7 +120,7 @@ export async function processReceiptRun({ organizationId, documentId, runId }) {
     const documents = await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=*`);
     const document = documents[0]; if (!document) throw new Error('receipt_document_not_found');
     const pages = await financeRest(`timefit_user_finance_document_pages?document_id=eq.${encodeURIComponent(documentId)}&select=*&order=page_number.asc`);
-    const sourcePages = pages.length ? pages : [{ storage_path: document.storage_path, mime_type: document.mime_type }];
+    const sourcePages = receiptSourcePages(document, pages);
     if (sourcePages.some(page => !String(page.mime_type || '').startsWith('image/'))) throw new Error('receipt_image_required');
     if (!timefitAxConfigured()) throw new Error('timefit_ax_not_configured');
     const axResult = await extractReceiptWithTimefitAx({

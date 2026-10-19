@@ -93,6 +93,19 @@ export function encodedStoragePath(path, { supabaseUrl = process.env.SUPABASE_UR
   return parts.map(encodeURIComponent).join('/');
 }
 
+export function receiptSourcePages(document, pages = []) {
+  const sourcePages = Array.isArray(pages) && pages.length
+    ? pages
+    : [{ storage_path: document?.storage_path, mime_type: document?.mime_type, page_number: 1 }];
+  return sourcePages.map((page, index) => {
+    const pageNumber = Number(page?.page_number || index + 1);
+    const storagePath = String(page?.storage_path || '').trim()
+      || (pageNumber === 1 ? String(document?.storage_path || '').trim() : '');
+    if (!storagePath) throw new Error('receipt_storage_path_missing');
+    return { ...page, storage_path: storagePath, mime_type: page?.mime_type || document?.mime_type || null };
+  });
+}
+
 function absoluteSignedUrl(value) {
   const signed = String(value || '');
   if (!signed) throw new Error('timefit_ax_signed_url_missing');

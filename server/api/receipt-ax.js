@@ -1,5 +1,5 @@
 import { authorizeFinance, authorizeOrganizationMember, canAccessFinanceCostCenter, financeError, financeRest, financeServerConfigured, methodNotAllowed } from './_finance-server.js';
-import { extractReceiptWithTimefitAx, normalizedRequestId } from './_timefit-ax.js';
+import { extractReceiptWithTimefitAx, normalizedRequestId, receiptSourcePages } from './_timefit-ax.js';
 
 export { axBaseUrl, axTimeout, normalizeImageUrls, normalizedRequestId } from './_timefit-ax.js';
 
@@ -34,7 +34,7 @@ export default async function handler(req, res) {
     authorized = true;
     if (FINAL_REVIEW_STATES.has(document.review_status)) return res.status(409).json({ ok: false, error: '검토가 종료된 영수증은 다시 분석할 수 없습니다.' });
     const pages = await financeRest(`timefit_user_finance_document_pages?document_id=eq.${encodeURIComponent(documentId)}&select=storage_path,mime_type&page_number=not.is.null&order=page_number.asc`);
-    const sourcePages = pages.length ? pages : [{ storage_path: document.storage_path, mime_type: document.mime_type }];
+    const sourcePages = receiptSourcePages(document, pages);
     if (sourcePages.some(page => !String(page.mime_type || '').startsWith('image/'))) return res.status(400).json({ ok: false, error: '이미지 영수증만 분석할 수 있습니다.' });
     await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}&organization_id=eq.${encodeURIComponent(organizationId)}`, {
       method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ processing_status: 'processing', processing_error: null }),

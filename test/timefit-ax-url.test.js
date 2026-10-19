@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { encodedStoragePath, extractReceiptWithTimefitAx, normalizeTimefitAxExtraction, resolveTimefitAxUrl } from '../server/api/_timefit-ax.js';
+import { encodedStoragePath, extractReceiptWithTimefitAx, normalizeTimefitAxExtraction, receiptSourcePages, resolveTimefitAxUrl } from '../server/api/_timefit-ax.js';
 
 function withAxUrl(value, callback) {
   const previous = process.env.TIMEFIT_AX_URL;
@@ -61,6 +61,19 @@ test('Supabase 영수증 저장 경로의 중복 구분자와 전체 URL을 안�
   assert.throws(() => encodedStoragePath('https://project.supabase.co/not-storage/receipt.jpg', options), /storage_path_invalid/);
   assert.throws(() => encodedStoragePath('https://project.supabase.co/storage/v1/object/authenticated/timefit-finance-documents/org/%2E%2E/receipt.jpg', options), /storage_path_invalid/);
   assert.throws(() => encodedStoragePath('org/../receipt.jpg', options), /storage_path_invalid/);
+});
+
+test('첫 페이지 경로가 비어 있으면 문서 원본 경로를 사용한다', () => {
+  const document = { storage_path: 'org/staff/session/01-receipt.jpg', mime_type: 'image/jpeg' };
+  assert.deepEqual(receiptSourcePages(document, [{ page_number: 1, storage_path: null, mime_type: null }]), [{
+    page_number: 1,
+    storage_path: 'org/staff/session/01-receipt.jpg',
+    mime_type: 'image/jpeg',
+  }]);
+  assert.throws(() => receiptSourcePages(document, [
+    { page_number: 1, storage_path: null, mime_type: 'image/jpeg' },
+    { page_number: 2, storage_path: null, mime_type: 'image/jpeg' },
+  ]), /receipt_storage_path_missing/);
 });
 
 test('Timefit AX extraction is normalized for the existing receipt pipeline', () => {
