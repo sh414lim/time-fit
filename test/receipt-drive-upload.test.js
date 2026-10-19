@@ -15,22 +15,50 @@ test('영수증 원본은 인증된 Google Drive 함수로 업로드된다', asy
   assert.match(source, /supportsAllDrives=true/);
 });
 
-test('관리자와 직원 영수증 UI는 OCR·검토 저장을 호출하지 않는다', async () => {
+test('관리자와 직원 영수증 UI는 원본 등록 후 분석·지출·검토 처리를 시작한다', async () => {
   const [main, employee] = await Promise.all([read('src/main.jsx'), read('src/features/finance/EmployeeReceiptSubmission.jsx')]);
   const manager = main.slice(main.indexOf('function ManagerReceiptUpload'), main.indexOf('function ExpenseWorkspace'));
   assert.match(manager, /uploadReceiptToGoogleDrive/);
-  assert.doesNotMatch(manager, /createReceiptSubmission|processReceiptDocument/);
+  assert.match(manager, /createReceiptSubmission/);
+  assert.match(manager, /processReceiptDocument/);
+  assert.match(manager, /source: "manager_web"/);
+  assert.match(manager, /Promise\.allSettled/);
   assert.match(employee, /uploadReceiptToGoogleDrive/);
-  assert.doesNotMatch(employee, /createReceiptSubmission|processReceiptDocument|confirmReceiptSubmission|loadMyReceiptDocuments/);
-  assert.doesNotMatch(main, /\['evidence', '증빙 검토'\]/);
+  assert.match(employee, /createReceiptSubmission/);
+  assert.match(employee, /processReceiptDocument/);
+  assert.match(employee, /confirmReceiptSubmission/);
+  assert.match(employee, /loadMyReceiptDocuments/);
+  assert.match(employee, /source: 'employee_web'/);
+  assert.match(employee, /Promise\.allSettled/);
+  assert.match(main, /\["evidence", "증빙 검토"\]/);
+  assert.match(main, /<ExpenseReviewQueue/);
 });
 
 test('Drive 업로드 링크는 페이지 이동과 새로고침 후에도 복원된다', async () => {
   const [client, main, employee] = await Promise.all([read('src/lib/supabase.js'), read('src/main.jsx'), read('src/features/finance/EmployeeReceiptSubmission.jsx')]);
   assert.match(client, /timefit:drive-receipts:/);
   assert.match(client, /localStorage\.setItem/);
+  assert.match(client, /uploadedBy: userId/);
+  assert.match(client, /currentUserOnly/);
   assert.match(client, /export async function loadDriveReceiptUploads/);
   assert.match(main, /loadDriveReceiptUploads\(organizationId\)/);
-  assert.match(employee, /loadDriveReceiptUploads\(organizationId\)/);
-  assert.match(employee, /const form = event\.currentTarget/);
+  assert.match(employee, /loadDriveReceiptUploads\(organizationId, \{ currentUserOnly: true \}\)/);
+  assert.match(employee, /const formElement = event\.currentTarget/);
+  assert.match(employee, /const form = new FormData\(formElement\)/);
+});
+
+test('Vercel Pages API는 AX 처리를 응답 전에 완료해 작업이 queued에 남지 않는다', async () => {
+  const source = await read('server/api/receipt-process.js');
+  assert.match(source, /process\.env\.VERCEL === '1'/);
+  assert.match(source, /if \(process\.env\.VERCEL === '1'\) await task\(\)/);
+  assert.match(source, /await dispatchReceiptRun\(\{ organizationId, documentId, queued \}\)/);
+  assert.doesNotMatch(source, /scheduleBackground\(\(\) => processReceiptRun\(\{ organizationId, documentId, runId: run\.id \}\)\)/);
+});
+
+test('영수증 처리 요청은 AX 완료 시간을 고려한 전용 타임아웃을 사용한다', async () => {
+  const source = await read('src/lib/supabase.js');
+  assert.match(source, /requestWithTimeout = \(request, label = '요청', timeoutMs = 15000\)/);
+  assert.match(source, /receipt-process'[\s\S]*timeoutMs: 70000/);
+  assert.match(source, /method: 'PATCH'[\s\S]*action: 'submitter_confirm'[\s\S]*timeoutMs: 70000/);
+  assert.match(source, /'card_connection', timeoutMs/);
 });

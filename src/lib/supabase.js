@@ -10,9 +10,9 @@ let refreshSessionInFlight = null;
 // A stalled network request must never leave the application behind an
 // indefinite full-screen loader. Keep the timeout here so auth and workforce
 // reads fail consistently and the UI can recover with a visible retry path.
-const requestWithTimeout = (request, label = '요청') => Promise.race([
+const requestWithTimeout = (request, label = '요청', timeoutMs = 15000) => Promise.race([
   request,
-  new Promise((_, reject) => window.setTimeout(() => reject(new Error(`${label}_timeout`)), 15000)),
+  new Promise((_, reject) => window.setTimeout(() => reject(new Error(`${label}_timeout`)), timeoutMs)),
 ]);
 
 // Supabase may report any of these while a persisted refresh token has already
@@ -159,7 +159,7 @@ export async function loadWorkforce(organizationId) {
   const context = await getAuthContext();
   const canViewCompensation = Boolean(context.isOrganizationOwner || context.managementAccount?.permissions?.includes('employee.compensation.view'));
   const staffColumns = `id,user_id,display_name,department,category_id,job_title,joined_on,phone_e164,avatar_path,sort_order${canViewCompensation ? ',pay_type,hourly_wage,daily_wage,monthly_salary,annual_salary' : ''}`;
-  const [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult] = await requestWithTimeout(Promise.all([
+  const [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult, orderResult] = await requestWithTimeout(Promise.all([
     allWorkforceRows(() => client.from('timefit_user_staff').select(staffColumns).eq('organization_id', organizationId).order('sort_order').order('created_at').order('id')),
     allWorkforceRows(() => client.from('timefit_user_work_schedules').select('id,staff_id,work_date,starts_at,ends_at,break_minutes,break_paid,break_starts_at,break_ends_at,shift_name,is_day_off,status,approval_status,submitted_by,submitted_at,reviewed_by,reviewed_at,review_comment,updated_at').eq('organization_id', organizationId).order('work_date').order('id')),
     allWorkforceRows(() => client.from('timefit_user_leave_requests').select('id,staff_id,starts_on,ends_on,leave_type,amount,reason,status,review_comment,created_at').eq('organization_id', organizationId).order('created_at', { ascending: false }).order('id')),
@@ -167,8 +167,9 @@ export async function loadWorkforce(organizationId) {
     client.from('timefit_user_organization_settings').select('*').eq('organization_id', organizationId).maybeSingle(),
     allWorkforceRows(() => client.from('timefit_user_leave_grants').select('id,staff_id,amount,reason,grant_type,attendance_record_id,granted_at,created_at').eq('organization_id', organizationId).order('granted_at', { ascending: false }).order('id')),
     allWorkforceRows(() => client.from('timefit_user_staff_categories').select('id,name,color,sort_order').eq('organization_id', organizationId).order('sort_order').order('name').order('id')),
+    client.from('timefit_user_staff_order_preferences').select('staff_id,sort_order').eq('organization_id', organizationId).order('sort_order'),
   ]), 'workforce_load');
-  for (const result of [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult]) if (result.error) throw result.error;
+  for (const result of [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult, orderResult]) if (result.error) throw result.error;
   const userIds = (staffResult.data ?? []).map(item => item.user_id).filter(Boolean);
   const accountsResult = userIds.length
     ? await requestWithTimeout(client.from('timefit_user_accounts').select('id,display_name').in('id', userIds), 'workforce_accounts')
@@ -177,7 +178,13 @@ export async function loadWorkforce(organizationId) {
   const accounts = Object.fromEntries((accountsResult.data ?? []).map(item => [item.id, item]));
   const categories = categoriesResult.data ?? [];
   const categoryById = Object.fromEntries(categories.map(item => [item.id, item]));
-  const staffRows = staffResult.data ?? [];
+  const preferredOrder = new Map((orderResult.data ?? []).map(item => [item.staff_id, Number(item.sort_order)]));
+  const staffRows = [...(staffResult.data ?? [])].sort((a, b) => {
+    const aPreferred = preferredOrder.get(a.id);
+    const bPreferred = preferredOrder.get(b.id);
+    if (aPreferred !== undefined || bPreferred !== undefined) return (aPreferred ?? Number.MAX_SAFE_INTEGER) - (bPreferred ?? Number.MAX_SAFE_INTEGER);
+    return (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0);
+  }).map((item, index) => ({ ...item, sort_order: index }));
   const avatarPaths = staffRows.map(item => item.avatar_path).filter(Boolean);
   const signedAvatarUrls = avatarPaths.length
     ? await client.storage.from('timefit-staff-avatars').createSignedUrls(avatarPaths, 60 * 60)
@@ -207,10 +214,11 @@ export async function deleteStaffCategory(id) {
   if (error) throw error;
 }
 
-export async function saveStaffOrder(staffIds) {
-  const results = await Promise.all(staffIds.map((id, index) => requireClient().from('timefit_user_staff').update({ sort_order: index }).eq('id', id)));
-  const failed = results.find(result => result.error);
-  if (failed) throw failed.error;
+export async function saveStaffOrder({ organizationId, staffIds }) {
+  const { data, error } = await requireClient().rpc('timefit_user_reorder_staff', { p_organization_id: organizationId, p_staff_ids: staffIds });
+  if (error) throw error;
+  if (Number(data) !== staffIds.length) throw new Error('staff_order_incomplete');
+  return data;
 }
 
 function throwWorkScheduleError(error) {
@@ -536,14 +544,16 @@ export async function createReceiptSubmission({ organizationId, files, costCente
 }
 export async function uploadReceiptToGoogleDrive({ organizationId, file }) {
   if (!organizationId || !file?.size) throw new Error('영수증 파일을 선택해 주세요.');
+  const client = requireClient();
   const body = new FormData(); body.set('organizationId', organizationId); body.set('file', file, file.name);
-  const { data, error } = await requireClient().functions.invoke('upload-receipt-drive', { body });
+  const { data, error } = await client.functions.invoke('upload-receipt-drive', { body });
   if (error) {
     const detail = await error.context?.json?.().catch(() => null);
     throw new Error(detail?.error || error.message || 'Google Drive 업로드에 실패했습니다.');
   }
   if (!data?.file?.webViewLink) throw new Error('Google Drive 파일 URL을 받지 못했습니다.');
-  const uploaded = { ...data.file, createdAt: data.file.createdTime || new Date().toISOString() };
+  const userId = (await client.auth.getUser()).data.user?.id || null;
+  const uploaded = { ...data.file, uploadedBy: userId, createdAt: data.file.createdTime || new Date().toISOString() };
   if (typeof window !== 'undefined') {
     const key = `timefit:drive-receipts:${organizationId}`;
     let current = [];
@@ -552,9 +562,14 @@ export async function uploadReceiptToGoogleDrive({ organizationId, file }) {
   }
   return uploaded;
 }
-export async function loadDriveReceiptUploads(organizationId) {
+export async function loadDriveReceiptUploads(organizationId, { currentUserOnly = false } = {}) {
   if (!organizationId || typeof window === 'undefined') return [];
-  try { return JSON.parse(window.localStorage.getItem(`timefit:drive-receipts:${organizationId}`) || '[]'); }
+  try {
+    const uploads = JSON.parse(window.localStorage.getItem(`timefit:drive-receipts:${organizationId}`) || '[]');
+    if (!currentUserOnly) return uploads;
+    const userId = (await requireClient().auth.getUser()).data.user?.id;
+    return userId ? uploads.filter(item => item.uploadedBy === userId) : [];
+  }
   catch { return []; }
 }
 export async function loadMyReceiptDocuments(organizationId) {
@@ -583,7 +598,7 @@ export async function createManualExpense(input) {
   return cardConnectionRequest('expenses', { method: 'POST', body: input });
 }
 export async function processReceiptDocument({ organizationId, documentId }) {
-  const payload = await cardConnectionRequest('receipt-process', { method: 'POST', body: { organizationId, documentId, action: 'enqueue' } });
+  const payload = await cardConnectionRequest('receipt-process', { method: 'POST', body: { organizationId, documentId, action: 'enqueue' }, timeoutMs: 70000 });
   return payload;
 }
 export async function analyzeReceiptWithTimefitAx({ organizationId, documentId, imageUrl, imageUrls, requestId }) {
@@ -594,7 +609,7 @@ export async function loadReceiptSubmission({ organizationId, documentId }) {
   return cardConnectionRequest('receipt-process', { query: { organizationId, documentId } });
 }
 export async function confirmReceiptSubmission({ organizationId, documentId, patch }) {
-  return cardConnectionRequest('receipt-process', { method: 'PATCH', body: { organizationId, documentId, action: 'submitter_confirm', patch } });
+  return cardConnectionRequest('receipt-process', { method: 'PATCH', body: { organizationId, documentId, action: 'submitter_confirm', patch }, timeoutMs: 70000 });
 }
 export async function loadExpenseReviewQueue(organizationId, status = 'attention', costCenterId = '') {
   const payload = await cardConnectionRequest('expense-review', { query: { organizationId, status, ...(costCenterId ? { costCenterId } : {}) } });
@@ -672,7 +687,7 @@ export async function disconnectCorporateCard(id) {
   if (error) throw error; return data;
 }
 
-async function cardConnectionRequest(path, { method = 'GET', query, body } = {}) {
+async function cardConnectionRequest(path, { method = 'GET', query, body, timeoutMs = 15000 } = {}) {
   const client = requireClient();
   const { data: { session } } = await client.auth.getSession();
   if (!session?.access_token) throw new Error('로그인이 필요합니다.');
@@ -681,7 +696,7 @@ async function cardConnectionRequest(path, { method = 'GET', query, body } = {})
     method,
     headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
-  }), 'card_connection');
+  }), 'card_connection', timeoutMs);
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(payload.error || '카드사 연결 요청을 완료하지 못했습니다.');

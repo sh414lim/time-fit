@@ -2,6 +2,7 @@ import { after } from 'next/server.js';
 import { createHash } from 'node:crypto';
 import { authorizeFinance, authorizeOrganizationMember, canAccessFinanceCostCenter, financeError, financeRest, financeServerConfigured, methodNotAllowed, serviceHeaders } from './_finance-server.js';
 import { extractReceiptWithLlm, mergeReceiptExtractions } from './_receipt-llm.js';
+import { extractReceiptWithTimefitAx, timefitAxConfigured } from './_timefit-ax.js';
 import { receiptValidation } from '../domain/receipt-validation.js';
 import { extractSpatialReceipt, normalizeOcrNumber } from '../domain/receipt-spatial-extraction.js';
 import { expenseAmountError } from '../domain/expense-amount-validation.js';
@@ -25,12 +26,12 @@ const extractDate = text => {
 
 export const structuredReceipt = (text, annotation = null) => {
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const businessNumber = text.match(/(?:사업자(?:등록)?번호|사업자)\s*[:：]?\s*(\d{3})[- ]?(\d{2})[- ]?(\d{5})/i);
-  const approvalNumber = text.match(/(?:승인번호|승인 No\.?)\s*[:：]?\s*([0-9A-Za-z-]{4,})/i);
-  const last4 = text.match(/(?:카드번호|카드)\s*[:：]?\s*(?:[*Xx#-]+\s*)?(\d{4})(?!\d)/i);
+  const businessNumber = text.match(/(?:사업자(?:등록)?번호|사업자|business(?:\s+registration)?\s*(?:no\.?|number))\s*[:：]?\s*(\d{3})[- ]?(\d{2})[- ]?(\d{5})/i);
+  const approvalNumber = text.match(/(?:승인번호|승인 No\.?|approval\s*(?:no\.?|number))\s*[:：]?\s*([0-9A-Za-z-]{4,})/i);
+  const last4 = text.match(/(?:카드번호|카드|card(?:\s*(?:no\.?|number))?)\s*[:：]?\s*(?:[*Xx#-]+\s*)?(\d{4})(?!\d)/i);
   const spatial = annotation ? extractSpatialReceipt(annotation, text) : {};
   return {
-    merchantName: spatial.merchantName || lines.find(line => !/영수증|매출전표|거래\s*명세서|사업자|대표|전화|주소/i.test(line) && /[가-힣A-Za-z]/.test(line)) || null,
+    merchantName: spatial.merchantName || lines.find(line => !/영수증|매출전표|거래\s*명세서|사업자|business(?:\s+registration)?\s*(?:no\.?|number)|대표|전화|주소/i.test(line) && /[가-힣A-Za-z]/.test(line)) || null,
     transactionDate: extractDate(text), totalAmount: spatial.totalAmount || extractAmount(text),
     merchantBusinessNumber: spatial.merchantBusinessNumber || (businessNumber ? `${businessNumber[1]}-${businessNumber[2]}-${businessNumber[3]}` : null),
     approvalNumber: approvalNumber?.[1] || null, cardLast4: last4?.[1] || null,
@@ -173,28 +174,49 @@ export async function processReceiptRun({ organizationId, documentId, runId }) {
     const pages = await financeRest(`timefit_user_finance_document_pages?document_id=eq.${encodeURIComponent(documentId)}&select=*&order=page_number.asc`);
     const sourcePages = pages.length ? pages : [{ storage_path: document.storage_path, mime_type: document.mime_type }];
     if (sourcePages.some(page => !String(page.mime_type || '').startsWith('image/'))) throw new Error('receipt_image_required');
-    const pageResults = [];
-    for (const page of sourcePages) {
-      pageResults.push(await visionText(await downloadDocument(page.storage_path)));
-      await financeRest(`timefit_user_expense_processing_runs?id=eq.${encodeURIComponent(runId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ heartbeat_at: new Date().toISOString() }) });
+    let text = ''; let extracted = null; let llmResult = null; let llmError = null; let axResult = null; let axError = null;
+    if (timefitAxConfigured()) {
+      try {
+        axResult = await extractReceiptWithTimefitAx({
+          organizationId, documentId, runId,
+          storagePaths: sourcePages.map(page => page.storage_path),
+        });
+        text = axResult.rawText;
+        extracted = { ...axResult.extracted, imageContentSha256: axResult.imageContentSha256, axRequestId: axResult.requestId };
+        await financeRest(`timefit_user_expense_processing_runs?id=eq.${encodeURIComponent(runId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ heartbeat_at: new Date().toISOString() }) });
+      } catch (error) {
+        axError = error;
+        console.error('timefit_ax_receipt_fallback', { documentId, runId, message: error.message });
+      }
     }
-    const text = pageResults.map(result => result.text).filter(Boolean).join('\n\n--- page ---\n\n');
-    if (!text.trim()) throw new Error('receipt_text_not_found');
-    const spatialPages = pageResults.map(result => structuredReceipt(result.text, result.annotation));
-    const combined = structuredReceipt(text);
-    const primary = spatialPages[0] || {};
-    const ruleBased = {
-      ...combined,
-      ...primary,
-      merchantName: primary.merchantName || combined.merchantName,
-      merchantBusinessNumber: primary.merchantBusinessNumber || combined.merchantBusinessNumber,
-      transactionDate: primary.transactionDate || combined.transactionDate,
-      totalAmount: primary.totalAmount || combined.totalAmount,
-      lineItems: spatialPages.flatMap(page => page.lineItems || []).map((item, index) => ({ ...item, lineNumber: index + 1 })),
-    };
-    let llmResult = null; let llmError = null;
-    try { llmResult = await extractReceiptWithLlm(text); } catch (error) { llmError = error; }
-    let extracted = mergeReceiptExtractions(ruleBased, llmResult);
+    if (!extracted) {
+      const pageResults = [];
+      for (const page of sourcePages) {
+        pageResults.push(await visionText(await downloadDocument(page.storage_path)));
+        await financeRest(`timefit_user_expense_processing_runs?id=eq.${encodeURIComponent(runId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ heartbeat_at: new Date().toISOString() }) });
+      }
+      text = pageResults.map(result => result.text).filter(Boolean).join('\n\n--- page ---\n\n');
+      if (!text.trim()) throw new Error('receipt_text_not_found');
+      const spatialPages = pageResults.map(result => structuredReceipt(result.text, result.annotation));
+      const combined = structuredReceipt(text);
+      const primary = spatialPages[0] || {};
+      const ruleBased = {
+        ...combined,
+        ...primary,
+        merchantName: primary.merchantName || combined.merchantName,
+        merchantBusinessNumber: primary.merchantBusinessNumber || combined.merchantBusinessNumber,
+        transactionDate: primary.transactionDate || combined.transactionDate,
+        totalAmount: primary.totalAmount || combined.totalAmount,
+        lineItems: spatialPages.flatMap(page => page.lineItems || []).map((item, index) => ({ ...item, lineNumber: index + 1 })),
+      };
+      try { llmResult = await extractReceiptWithLlm(text); } catch (error) { llmError = error; }
+      extracted = mergeReceiptExtractions(ruleBased, llmResult);
+    }
+    const extractionModel = axResult?.model || llmResult?.model || null;
+    const fallbackUsed = Boolean(axError) || (!axResult && !llmResult);
+    const processingWarning = axError
+      ? `timefit_ax_fallback:${String(axError.message || 'failed').slice(0, 120)}`
+      : llmError ? String(llmError.message || 'llm_fallback').slice(0, 160) : null;
     const rules = await financeRest(`timefit_user_expense_classification_rules?organization_id=eq.${encodeURIComponent(organizationId)}&is_active=eq.true&select=id,match_type,match_value,category,default_reason,priority,is_active,hit_count&order=priority.desc&limit=200`);
     const classificationRule = matchingClassificationRule(extracted, rules);
     if (classificationRule) {
@@ -206,17 +228,17 @@ export async function processReceiptRun({ organizationId, documentId, runId }) {
       extracted = { ...extracted, category: inferred.category, categorySource: inferred.source, categoryConfidence: inferred.confidence, appliedRuleId: prior?.classification_rule_id || null };
     }
     const validation = receiptValidation(extracted);
-    const extraction = await saveExtraction({ organizationId, document, runId, rawText: text, extracted, validation, model: llmResult?.model });
+    const extraction = await saveExtraction({ organizationId, document, runId, rawText: text, extracted, validation, model: extractionModel });
     const fingerprint = receiptFingerprint(extracted);
     const duplicates = fingerprint ? await financeRest(`timefit_user_finance_documents?organization_id=eq.${encodeURIComponent(organizationId)}&document_type=eq.receipt&receipt_fingerprint=eq.${encodeURIComponent(fingerprint)}&id=neq.${encodeURIComponent(documentId)}&review_status=not.in.(rejected,withdrawn)&select=id,title,created_at&order=created_at.asc&limit=1`) : [];
     if (duplicates[0]) {
       await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ processing_status: 'ready', review_status: 'submitter_review', extracted_data: { ...extracted, duplicateDocumentId: duplicates[0].id }, ocr_text: text.slice(0,50000), receipt_fingerprint: fingerprint, duplicate_of_document_id: duplicates[0].id, processing_error: 'duplicate_receipt_suspected', document_date: extracted.transactionDate, processed_at: new Date().toISOString() }) });
-      await finishRun(runId, { status: 'succeeded', extraction_provider: extracted.extractionProvider, extraction_model: llmResult?.model || null, fallback_used: !llmResult, error_code: 'duplicate_receipt_suspected' });
+      await finishRun(runId, { status: 'succeeded', extraction_provider: extracted.extractionProvider, extraction_model: extractionModel, fallback_used: fallbackUsed, error_code: 'duplicate_receipt_suspected' });
       return { duplicateOfDocumentId: duplicates[0].id };
     }
     if (!validation.validForManagerReview) {
       await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ processing_status: 'ready', review_status: 'submitter_review', extracted_data: extracted, ocr_text: text.slice(0,50000), receipt_fingerprint: fingerprint, document_date: extracted.transactionDate, processed_at: new Date().toISOString() }) });
-      await finishRun(runId, { status: 'succeeded', extraction_provider: extracted.extractionProvider, extraction_model: llmResult?.model || null, fallback_used: !llmResult, error_code: llmError ? String(llmError.message || 'llm_fallback').slice(0,160) : null });
+      await finishRun(runId, { status: 'succeeded', extraction_provider: extracted.extractionProvider, extraction_model: extractionModel, fallback_used: fallbackUsed, error_code: processingWarning });
       return;
     }
     const expense = await createOrUpdateExpense({ organizationId, document, extracted, classificationRule });
@@ -225,7 +247,7 @@ export async function processReceiptRun({ organizationId, documentId, runId }) {
     const candidates = await replaceCandidates({ organizationId, documentId, expense, extracted });
     if (classificationRule) await financeRest(`timefit_user_expense_classification_rules?id=eq.${encodeURIComponent(classificationRule.id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ hit_count: Number(classificationRule.hit_count || 0) + 1, last_applied_at: new Date().toISOString(), updated_at: new Date().toISOString() }) });
     await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ processing_status: 'ready', review_status: validation.requiresSubmitterReview ? 'submitter_review' : 'manager_review', payment_method: document.payment_method || extracted.paymentMethod, document_date: extracted.transactionDate, extracted_data: extracted, ocr_text: text.slice(0,50000), receipt_fingerprint: fingerprint, processed_at: new Date().toISOString() }) });
-    await finishRun(runId, { status: 'succeeded', extraction_provider: extracted.extractionProvider, extraction_model: llmResult?.model || null, input_tokens: llmResult?.usage?.input_tokens || null, output_tokens: llmResult?.usage?.output_tokens || null, fallback_used: !llmResult, error_code: llmError ? String(llmError.message || 'llm_fallback').slice(0,160) : null });
+    await finishRun(runId, { status: 'succeeded', extraction_provider: extracted.extractionProvider, extraction_model: extractionModel, input_tokens: llmResult?.usage?.input_tokens || null, output_tokens: llmResult?.usage?.output_tokens || null, fallback_used: fallbackUsed, error_code: processingWarning });
     return { expenseId: expense.id, candidateCount: candidates.length };
   } catch (error) {
     await finishRun(runId, { status: 'failed', error_code: String(error.message || 'receipt_processing_failed').slice(0,160) }).catch(() => {});
@@ -269,18 +291,26 @@ async function enqueueRun({ organizationId, documentId, userId }) {
   if (active.length) {
     if (isReceiptRunStale(active[0]) && Number(active[0].attempt_count || 0) < 5) {
       await financeRest(`timefit_user_expense_processing_runs?id=eq.${encodeURIComponent(active[0].id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: 'queued', error_code: 'stale_run_recovered', finished_at: null }) });
-      scheduleBackground(() => processReceiptRun({ organizationId, documentId, runId: active[0].id }));
-      return { run: { ...active[0], status: 'queued' }, duplicateRequest: false, recovered: true };
+      return { run: { ...active[0], status: 'queued' }, duplicateRequest: false, recovered: true, shouldProcess: true };
     }
-    return { run: active[0], duplicateRequest: true };
+    return { run: active[0], duplicateRequest: true, shouldProcess: active[0].status === 'queued' };
   }
   const recent = await financeRest(`timefit_user_expense_processing_runs?document_id=eq.${encodeURIComponent(documentId)}&select=id&order=created_at.desc&limit=5`);
   if (recent.length >= 5) throw new Error('receipt_retry_limit');
   const rows = await financeRest('timefit_user_expense_processing_runs', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify([{ organization_id: organizationId, document_id: documentId, status: 'queued', ocr_provider: 'google_vision', ocr_model: 'DOCUMENT_TEXT_DETECTION', extractor_version: 'receipt-v2', created_by: userId }]) });
   const run = rows[0];
   await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ processing_status: 'queued', processing_error: null }) });
-  scheduleBackground(() => processReceiptRun({ organizationId, documentId, runId: run.id }));
-  return { run, duplicateRequest: false };
+  return { run, duplicateRequest: false, shouldProcess: true };
+}
+
+async function dispatchReceiptRun({ organizationId, documentId, queued }) {
+  if (!queued.shouldProcess) return;
+  const task = () => processReceiptRun({ organizationId, documentId, runId: queued.run.id });
+  // `after()` does not reliably retain work scheduled from a Pages API catch-all
+  // on Vercel. Await the bounded AX request there so a successful 202 never leaves
+  // the run permanently queued. Local development keeps the non-blocking behavior.
+  if (process.env.VERCEL === '1') await task();
+  else scheduleBackground(task);
 }
 
 export default async function handler(req, res) {
@@ -323,10 +353,12 @@ export default async function handler(req, res) {
       if (expenseId) await financeRest(`timefit_user_expenses?id=eq.${encodeURIComponent(expenseId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ transaction_date: transactionDate, total_amount: totalAmount, merchant_name: next.merchantName, status: 'review_required', updated_at: new Date().toISOString() }) });
       await financeRest('timefit_user_expense_audit_logs', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify([{ organization_id: organizationId, entity_type: 'finance_document', entity_id: documentId, action: 'submitter_confirmed', before_value: current, after_value: next, actor_id: auth.user.id, source: 'user' }]) });
       const queued = await enqueueRun({ organizationId, documentId, userId: auth.user.id });
+      await dispatchReceiptRun({ organizationId, documentId, queued });
       return res.status(202).json({ ok: true, documentId, runId: queued.run.id, duplicateRequest: queued.duplicateRequest });
     }
 
     const queued = await enqueueRun({ organizationId, documentId, userId: auth.user.id });
+    await dispatchReceiptRun({ organizationId, documentId, queued });
     return res.status(202).json({ ok: true, documentId, runId: queued.run.id, status: queued.run.status, duplicateRequest: queued.duplicateRequest });
   } catch (error) {
     if (error.message === 'receipt_retry_limit') return res.status(409).json({ ok: false, error: '자동 재분석 횟수를 초과했습니다. 관리자에게 확인을 요청해 주세요.' });
