@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "eventId": "10000000-0000-4000-8000-000000000003",
+  "eventType": "conversation.archived",
+  "conversationId": "20000000-0000-4000-8000-000000000001",
+  "occurredAt": "2026-10-16T00:02:00.000Z"
+}

@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "file": "realtime-message-created.valid.json",
+      "expectation": "valid_known",
+      "actions": ["get_conversation", "gap_fill_messages"]
+    },
+    {
+      "file": "realtime-conversation-updated.valid.json",
+      "expectation": "valid_known",
+      "actions": ["get_conversation"]
+    },
+    {
+      "file": "realtime-conversation-archived.valid.json",
+      "expectation": "valid_known",
+      "actions": ["get_conversation"]
+    },
+    {
+      "file": "realtime-conversation-updated.unknown-optional.valid.json",
+      "expectation": "valid_known",
+      "actions": ["get_conversation"]
+    },
+    {
+      "file": "realtime-message-created.missing-sequence.invalid.json",
+      "expectation": "contract_invalid",
+      "actions": []
+    },
+    {
+      "file": "realtime-conversation-updated.null-message-id.invalid.json",
+      "expectation": "contract_invalid",
+      "actions": []
+    },
+    {
+      "file": "realtime-unknown-event.forward-compatible.json",
+      "expectation": "valid_unknown",
+      "actions": ["get_conversation"]
+    }
+  ],
+  "matrices": [
+    "realtime-field-validation.cases.json",
+    "realtime-routing-negative.cases.json",
+    "reconciliation.cases.json",
+    "gap-fill-tail.cases.json",
+    "auth-retry.cases.json"
+  ],
+  "errorFixtures": [
+    {
+      "file": "server-error-authentication-required.valid.json",
+      "expectation": "valid_server_error"
+    },
+    {
+      "file": "server-error-authentication-required.missing-request-id.invalid.json",
+      "expectation": "contract_invalid"
+    },
+    {
+      "file": "client-failure-network.valid.json",
+      "expectation": "valid_client_failure"
+    },
+    {
+      "file": "client-failure-malformed-response.valid.json",
+      "expectation": "valid_client_failure"
+    }
+  ]
+}

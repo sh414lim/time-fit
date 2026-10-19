@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "updated-must-not-gap-fill",
+      "file": "realtime-conversation-updated.valid.json",
+      "requiredActions": ["get_conversation"],
+      "forbiddenActions": ["gap_fill_messages"]
+    },
+    {
+      "name": "archived-must-not-gap-fill",
+      "file": "realtime-conversation-archived.valid.json",
+      "requiredActions": ["get_conversation"],
+      "forbiddenActions": ["gap_fill_messages"]
+    },
+    {
+      "name": "unknown-must-not-be-message",
+      "file": "realtime-unknown-event.forward-compatible.json",
+      "requiredActions": ["get_conversation"],
+      "forbiddenActions": ["gap_fill_messages"]
+    },
+    {
+      "name": "message-must-use-both-recovery-paths",
+      "file": "realtime-message-created.valid.json",
+      "requiredActions": ["get_conversation", "gap_fill_messages"],
+      "forbiddenActions": []
+    }
+  ]
+}

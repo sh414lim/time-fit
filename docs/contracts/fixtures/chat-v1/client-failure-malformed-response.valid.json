@@ -1,0 +1,5 @@
+{
+  "source": "malformed_response",
+  "code": "internal_error",
+  "retryable": false
+}
