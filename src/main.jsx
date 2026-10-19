@@ -9094,6 +9094,11 @@ function App() {
   const [navigationContext, setNavigationContext] = useState({});
   const [mode, setMode] = useState("manager");
   const [active, setActive] = useState("dashboard");
+  const [visitedScreens, setVisitedScreens] = useState({
+    manager: ["dashboard"],
+    employee: ["employeeHome"],
+  });
+  const visitedScreenScopeRef = useRef("");
   const [managerGroup, setManagerGroup] = useState("operations");
   const [employees, setEmployees] = useState(supabase ? [] : defaultEmployees);
   const [schedules, setSchedules] = useState(
@@ -10040,10 +10045,48 @@ function App() {
     mode === "manager"
       ? [...permittedNav.slice(0, 3), ["more", "더보기", "⋯"]]
       : employeeNav;
-  const screenContent = (mode === "manager" ? managerContent : employeeContent)[
-    active
-  ];
-  const content = screenContent;
+  const screenContentByMode =
+    mode === "manager" ? managerContent : employeeContent;
+  const visitedScreenScope = `${authContext.session?.user?.id || "guest"}:${
+    authContext.membership?.organization_id || "none"
+  }`;
+  useEffect(() => {
+    setVisitedScreens((current) => {
+      if (visitedScreenScopeRef.current !== visitedScreenScope) {
+        visitedScreenScopeRef.current = visitedScreenScope;
+        return {
+          manager: mode === "manager" ? [active] : ["dashboard"],
+          employee: mode === "employee" ? [active] : ["employeeHome"],
+        };
+      }
+      if (current[mode].includes(active)) return current;
+      return { ...current, [mode]: [...current[mode], active] };
+    });
+  }, [active, mode, visitedScreenScope]);
+  const retainedScreenIds =
+    visitedScreenScopeRef.current === visitedScreenScope
+      ? visitedScreens[mode] || []
+      : [];
+  const mountedScreenIds = Array.from(
+    new Set([...retainedScreenIds, active]),
+  ).filter((id) => screenContentByMode[id] !== undefined);
+  // A visited screen stays mounted while another menu is open. Its local data,
+  // filters and form state therefore survive navigation, and mount-time API
+  // requests only run on the first visit (or after an account/business switch).
+  const content = (
+    <>
+      {mountedScreenIds.map((id) => (
+        <div
+          className="persistent-screen"
+          data-screen={id}
+          hidden={id !== active}
+          key={`${mode}:${id}`}
+        >
+          {screenContentByMode[id]}
+        </div>
+      ))}
+    </>
+  );
   useEffect(() => {
     if (mode !== "manager") return;
     const group = managerMenuGroups.find((item) => item.items.includes(active));
