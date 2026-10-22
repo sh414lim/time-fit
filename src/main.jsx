@@ -3270,28 +3270,35 @@ function Attendance({ employees, checkedIn, setCheckedIn, onSelect, onRefresh, c
 function ShortTermWorkerDetail({ organizationId, record, onClose }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState('');
-  useEffect(() => {
+  const loadDetail = () => {
     let active = true;
+    setError('');
     loadShortTermWorkerDetail(organizationId, record.id)
       .then(value => { if (active) setDetail(value); })
       .catch(reason => { if (active) setError(reason.message || '상세정보를 불러오지 못했습니다.'); });
     return () => { active = false; };
+  };
+  useEffect(() => {
+    setDetail(null);
+    return loadDetail();
   }, [organizationId, record.id]);
   const value = detail || record;
   return <Modal title="단기직원 상세" onClose={onClose} variant="short-term-worker-modal">
-    {error ? <div className="empty-schedule"><b>{error}</b></div> : !detail ? <LoadingBar label="신원정보를 안전하게 불러오는 중…"/> : <>
+    <>
       <div className="short-term-worker-profile"><Avatar name={value.display_name} color="blue" team="단기직원"/><div><b>{value.display_name}</b><span>단기직원</span></div></div>
       <dl className="short-term-worker-detail-list">
         <div><dt>이름</dt><dd>{value.display_name}</dd></div>
-        <div><dt>주민등록번호</dt><dd>{value.resident_registration_number}</dd></div>
-        <div><dt>전화번호</dt><dd>{value.phone_number}</dd></div>
+        <div><dt>주민등록번호</dt><dd>{value.resident_registration_number || (detail ? '-' : '불러오는 중…')}</dd></div>
+        <div><dt>전화번호</dt><dd>{value.phone_number || '-'}</dd></div>
         <div><dt>근무 날짜</dt><dd>{value.work_date}</dd></div>
         <div><dt>출근 시간</dt><dd>{formatAttendanceTime(value.checked_in_at)}</dd></div>
         <div><dt>퇴근 시간</dt><dd>{formatAttendanceTime(value.checked_out_at)}</dd></div>
         <div><dt>근무 시간</dt><dd>{value.checked_out_at ? formatHours(attendanceMinutes(value)) : '근무 중'}</dd></div>
       </dl>
+      {!detail && !error && <LoadingBar label="신원정보를 안전하게 불러오는 중…"/>}
+      {error && <div className="empty-schedule short-term-worker-detail-error"><b>{error}</b><button type="button" className="outline" onClick={loadDetail}>다시 시도</button></div>}
       <p className="short-term-worker-sensitive-note">관리자 권한으로 조회한 개인정보입니다.</p>
-    </>}
+    </>
   </Modal>;
 }
 
