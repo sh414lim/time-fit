@@ -267,6 +267,7 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
   const [credentials, setCredentials] = useState(null);
   const [chapter, setChapter] = useState("accounts");
   const [editing, setEditing] = useState(null);
+  const [viewingPermissions, setViewingPermissions] = useState(null);
   const [createMode, setCreateMode] = useState("link_existing");
   const [createPermissions, setCreatePermissions] = useState([
     "dashboard.view",
@@ -829,11 +830,7 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
                           ? "기존 직원 계정"
                           : "독립 관리자 계정"}
                       </span>
-                      <div>
-                        {granted.map((label) => (
-                          <small key={label}>{label}</small>
-                        ))}
-                      </div>
+                      <small className="management-permission-count">허용 기능 {granted.length}개</small>
                     </div>
                     <div className="management-account-actions">
                       <Chip
@@ -841,6 +838,13 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
                       >
                         {account.status === "active" ? "활성" : "중지"}
                       </Chip>
+                      <button
+                        type="button"
+                        className="outline management-permission-open"
+                        onClick={() => setViewingPermissions({ account, granted, linked })}
+                      >
+                        권한 보기
+                      </button>
                       <button
                         type="button"
                         className="outline"
@@ -867,6 +871,42 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
             )}
           </div>
         </section>
+      )}
+      {viewingPermissions && (
+        <Modal
+          title="관리자 권한 보기"
+          onClose={() => setViewingPermissions(null)}
+          variant="management-permission-modal"
+        >
+          <div className="management-permission-summary">
+            <div className="management-account-avatar">
+              {viewingPermissions.account.login_id.slice(0, 2).toUpperCase()}
+            </div>
+            <div>
+              <code>{viewingPermissions.account.login_id}</code>
+              <span>
+                {viewingPermissions.account.role_code === "executive_chef" ? "총괄셰프" : "매니저"}
+                {viewingPermissions.linked ? ` · ${viewingPermissions.linked.name} 연결` : " · 직원 연결 없음"}
+              </span>
+            </div>
+            <Chip type={viewingPermissions.account.status === "active" ? "green" : "gray"}>
+              {viewingPermissions.account.status === "active" ? "활성" : "중지"}
+            </Chip>
+          </div>
+          <section className="management-permission-detail">
+            <div>
+              <h4>허용 기능</h4>
+              <span>{viewingPermissions.granted.length}개</span>
+            </div>
+            {viewingPermissions.granted.length ? (
+              <ul>{viewingPermissions.granted.map((label) => <li key={label}>✓ {label}</li>)}</ul>
+            ) : <p>허용된 기능이 없습니다.</p>}
+          </section>
+          <div className="management-permission-modal-actions">
+            <button type="button" className="outline" onClick={() => setViewingPermissions(null)}>닫기</button>
+            <button type="button" className="submit" onClick={() => { const account = viewingPermissions.account; setViewingPermissions(null); openEditor(account); }}>권한 수정</button>
+          </div>
+        </Modal>
       )}
       {editing && (
         <Modal
@@ -3270,28 +3310,35 @@ function Attendance({ employees, checkedIn, setCheckedIn, onSelect, onRefresh, c
 function ShortTermWorkerDetail({ organizationId, record, onClose }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState('');
-  useEffect(() => {
+  const loadDetail = () => {
     let active = true;
+    setError('');
     loadShortTermWorkerDetail(organizationId, record.id)
       .then(value => { if (active) setDetail(value); })
       .catch(reason => { if (active) setError(reason.message || '상세정보를 불러오지 못했습니다.'); });
     return () => { active = false; };
+  };
+  useEffect(() => {
+    setDetail(null);
+    return loadDetail();
   }, [organizationId, record.id]);
   const value = detail || record;
   return <Modal title="단기직원 상세" onClose={onClose} variant="short-term-worker-modal">
-    {error ? <div className="empty-schedule"><b>{error}</b></div> : !detail ? <LoadingBar label="신원정보를 안전하게 불러오는 중…"/> : <>
+    <>
       <div className="short-term-worker-profile"><Avatar name={value.display_name} color="blue" team="단기직원"/><div><b>{value.display_name}</b><span>단기직원</span></div></div>
       <dl className="short-term-worker-detail-list">
         <div><dt>이름</dt><dd>{value.display_name}</dd></div>
-        <div><dt>주민등록번호</dt><dd>{value.resident_registration_number}</dd></div>
-        <div><dt>전화번호</dt><dd>{value.phone_number}</dd></div>
+        <div><dt>주민등록번호</dt><dd>{value.resident_registration_number || (detail ? '-' : '불러오는 중…')}</dd></div>
+        <div><dt>전화번호</dt><dd>{value.phone_number || '-'}</dd></div>
         <div><dt>근무 날짜</dt><dd>{value.work_date}</dd></div>
         <div><dt>출근 시간</dt><dd>{formatAttendanceTime(value.checked_in_at)}</dd></div>
         <div><dt>퇴근 시간</dt><dd>{formatAttendanceTime(value.checked_out_at)}</dd></div>
         <div><dt>근무 시간</dt><dd>{value.checked_out_at ? formatHours(attendanceMinutes(value)) : '근무 중'}</dd></div>
       </dl>
+      {!detail && !error && <LoadingBar label="신원정보를 안전하게 불러오는 중…"/>}
+      {error && <div className="empty-schedule short-term-worker-detail-error"><b>{error}</b><button type="button" className="outline" onClick={loadDetail}>다시 시도</button></div>}
       <p className="short-term-worker-sensitive-note">관리자 권한으로 조회한 개인정보입니다.</p>
-    </>}
+    </>
   </Modal>;
 }
 
