@@ -58,7 +58,7 @@ test('Timefit AX extraction is normalized for the existing receipt pipeline', ()
     currency: 'KRW', confidence: 0.9, warnings: ['부가세 확인 필요'],
     lineItems: [{ name: '아메리카노', quantity: 2, unitPrice: 6000, amount: 12000 }],
   });
-  assert.equal(result.extractionProvider, 'timefit_ax_codex');
+  assert.equal(result.extractionProvider, 'timefit_ax_unknown');
   assert.equal(result.merchantName, '테스트 상점');
   assert.equal(result.lineItems[0].itemNameRaw, '아메리카노');
   assert.equal(result.lineItems[0].lineAmount, 12000);

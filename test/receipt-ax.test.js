@@ -67,7 +67,7 @@ test('인증된 제출자의 AX 성공 결과를 저장하고 감사 로그를 �
     organizationId: 'org-1', documentId: 'doc-1', imageUrl: 'https://storage.example.com/receipt.jpg', requestId: 'receipt:doc-1:test',
   } }, res);
   assert.equal(res.statusCode, 200);
-  assert.equal(res.body.extraction.extractionProvider, 'timefit_ax_codex');
+  assert.equal(res.body.extraction.extractionProvider, 'timefit_ax_unknown');
   const patches = calls.filter(call => call.value.includes('/timefit_user_finance_documents?') && call.options.method === 'PATCH').map(call => JSON.parse(call.options.body));
   assert.equal(patches[0].processing_status, 'processing');
   assert.equal(patches.at(-1).processing_status, 'ready');

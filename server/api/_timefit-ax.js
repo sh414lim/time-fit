@@ -91,7 +91,7 @@ export async function createTimefitAxSignedUrl(storagePath, expiresIn = 600) {
   return absoluteSignedUrl(payload.signedURL || payload.signedUrl);
 }
 
-export function normalizeTimefitAxExtraction(value = {}) {
+export function normalizeTimefitAxExtraction(value = {}, provider = 'timefit_ax_unknown') {
   const confidence = Math.max(0, Math.min(1, Number(value.confidence) || 0));
   const normalized = validateReceiptExtraction({
     merchantName: value.merchantName,
@@ -117,9 +117,9 @@ export function normalizeTimefitAxExtraction(value = {}) {
       rawText: String(item?.name || ''),
       itemName: item?.name,
       quantity: item?.quantity,
-      unit: null,
+      unit: item?.unit,
       unitPrice: item?.unitPrice,
-      discountAmount: 0,
+      discountAmount: item?.discountAmount ?? 0,
       lineAmount: item?.amount,
       taxType: 'unknown',
       confidence,
@@ -130,7 +130,7 @@ export function normalizeTimefitAxExtraction(value = {}) {
     documentType: value.documentType || 'unknown',
     currency: value.currency || 'UNKNOWN',
     warnings: Array.isArray(value.warnings) ? value.warnings.map(item => String(item)).slice(0, 20) : [],
-    extractionProvider: 'timefit_ax_codex',
+    extractionProvider: provider,
   };
 }
 
@@ -161,8 +161,8 @@ export async function extractReceiptWithTimefitAx({ organizationId, documentId, 
   return {
     requestId,
     rawText: String(payload.extraction.rawText || ''),
-    extracted: normalizeTimefitAxExtraction(payload.extraction),
+    extracted: normalizeTimefitAxExtraction(payload.extraction, payload.model === 'google-cloud-vision-document-text-detection' ? 'timefit_ax_google_vision' : payload.model === 'codex-cli' ? 'timefit_ax_codex' : 'timefit_ax_unknown'),
     imageContentSha256: payload.imageContentSha256 || null,
-    model: 'codex-cli',
+    model: typeof payload.model === 'string' ? payload.model.slice(0, 120) : null,
   };
 }

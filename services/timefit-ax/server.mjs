@@ -4,6 +4,7 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import { pathToFileURL } from 'node:url';
+import { extractSpatialReceipt } from './receipt-spatial.mjs';
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -158,45 +159,45 @@ const MONEY_LINE = /^(?:KRW\s*)?[₩￦]?\s*([0-9][0-9,.]*)\s*(?:원|KRW)?$/i;
 
 const receiptLineItems = lines => {
   const items = [];
-  const totalLabelIndex = lines.findIndex(line => TOTAL_LABEL_LINE.test(line));
-  const headerEnd = totalLabelIndex >= 0 ? totalLabelIndex : lines.length;
-  let itemStart = 0;
-  for (let index = 0; index < headerEnd; index += 1) {
-    if (RECEIPT_METADATA_LINE.test(lines[index])) itemStart = index + 1;
+  const totalIndex = lines.findIndex(line => TOTAL_LABEL_LINE.test(line));
+  let start = 0;
+  for (let i = 0; i < (totalIndex < 0 ? lines.length : totalIndex); i++) {
+    if (RECEIPT_METADATA_LINE.test(lines[i]) && !/^(?:결제금액|받을금액|총\s*금액|총액|합\s*계|total|amount|카드|card)/i.test(lines[i])) start = i + 1;
   }
-  const append = (name, amount, rawText) => {
-    const normalizedName = String(name || '').replace(/\s+/g, ' ').trim();
-    const normalizedAmount = numberValue(amount);
-    if (!normalizedName || normalizedName.length > 120 || !/[가-힣A-Za-z]/.test(normalizedName) || RECEIPT_METADATA_LINE.test(normalizedName)) return;
-    if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) return;
-    items.push({ name: normalizedName, quantity: null, unitPrice: null, amount: normalizedAmount, confidence: 0.68, rawText });
-  };
-  for (let index = itemStart; index < lines.length; index += 1) {
-    if (totalLabelIndex >= 0 && index >= totalLabelIndex) break;
-    const line = lines[index];
-    if (RECEIPT_METADATA_LINE.test(line)) continue;
-    const inline = line.match(/^(.+?[가-힣A-Za-z][^\n]*?)\s+(?:KRW\s*)?[₩￦]?\s*([0-9][0-9,.]*)\s*(?:원|KRW)?$/i);
-    if (inline) {
-      append(inline[1], inline[2], line);
-      continue;
+  const summary = /^(?:금일\s*매출액|전\s*미수금|총\s*미수금|총\s*합계|합\s*계|총액|total|할인|거스름돈|받은현금)/i;
+  const numeric = /^\d+(?:,\d{3})*(?:\.\d+)?$/;
+  for (let i = start; i < (totalIndex < 0 ? lines.length : totalIndex); i++) {
+    const line = lines[i];
+    if (summary.test(line) || RECEIPT_METADATA_LINE.test(line)) continue;
+    const parts = line.replace(/원$/, '').trim().split(/\s+/);
+    const numbers = [];
+    while (parts.length && numeric.test(parts.at(-1))) numbers.unshift(numberValue(parts.pop()));
+    let name = parts.join(' ');
+    if (!/[가-힣A-Za-z]/.test(name)) continue;
+    if (!numbers.length) {
+      let j = i + 1;
+      while (j < lines.length && MONEY_LINE.test(lines[j])) {
+        numbers.push(numberValue(lines[j].match(MONEY_LINE)[1])); j++;
+      }
+      if (numbers.length) i = j - 1;
     }
-    const next = lines[index + 1];
-    const adjacentAmount = next?.match(MONEY_LINE);
-    if (adjacentAmount) {
-      append(line, adjacentAmount[1], `${line} ${next}`);
-      if (items.at(-1)?.rawText === `${line} ${next}`) index += 1;
+    // Only unambiguous name/amount or name/quantity/price/amount layouts.
+    // Duplicated EA + total quantity is accepted only when equal.
+    if (numbers.length === 4 && numbers[0] === numbers[1]) numbers.shift();
+    if (![1, 3].includes(numbers.length)) continue;
+    const [quantity, unitPrice, amount] = numbers.length === 3 ? numbers : [null, null, numbers[0]];
+    if (!(amount > 0)) continue;
+    items.push({ name, quantity, unitPrice, amount, confidence: 0.68 });
+  }
+  if (!items.length && totalIndex > start) {
+    const names = lines.slice(start, totalIndex).filter(line => /[가-힣A-Za-z]/.test(line) && !RECEIPT_METADATA_LINE.test(line));
+    const amounts = lines.slice(totalIndex + 1).filter(line => MONEY_LINE.test(line)).map(line => numberValue(line.match(MONEY_LINE)[1]));
+    if (amounts.length === names.length + 1 && amounts.slice(0, -1).reduce((a, b) => a + b, 0) === amounts.at(-1)) {
+      names.forEach((name, i) => items.push({ name, quantity: null, unitPrice: null, amount: amounts[i], confidence: 0.68 }));
     }
   }
-  if (!items.length) {
-    if (totalLabelIndex > 0) {
-      const names = lines.slice(itemStart, totalLabelIndex).filter(line => !RECEIPT_METADATA_LINE.test(line) && /[가-힣A-Za-z]/.test(line));
-      const amounts = lines.slice(totalLabelIndex + 1).map(line => line.match(MONEY_LINE)?.[1]).filter(Boolean);
-      names.forEach((name, index) => append(name, amounts[index], `${name} ${amounts[index] || ''}`.trim()));
-    }
-  }
-  return items.map(({ rawText, ...item }) => item);
+  return items;
 };
-
 export function parseReceiptText(rawText) {
   const text = String(rawText || '');
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -208,12 +209,14 @@ export function parseReceiptText(rawText) {
   const labelled = [...text.matchAll(/(?:금일\s*매출액|결제금액|받을금액|총\s*금액|총액|합\s*계|total(?:\s*amount)?|amount)\s*[:：]?\s*(?:KRW\s*)?[₩￦]?\s*([0-9][0-9,.]*)/gi)].map(match => numberValue(match[1])).filter(value => Number.isFinite(value) && value > 0);
   const currency = [...text.matchAll(/[₩￦]\s*([0-9][0-9,.]*)/g)].map(match => numberValue(match[1])).filter(value => Number.isFinite(value) && value > 0);
   const looseAmounts = lines.map(line => line.match(MONEY_LINE)?.[1]).map(numberValue).filter(value => Number.isFinite(value) && value > 0);
-  const totalAmount = labelled.at(-1) || (currency.length ? Math.max(...currency) : null) || looseAmounts.at(-1) || null;
+  const daily = text.match(/금일\s*매출액\s*[:：]?\s*([0-9][0-9,.]*)/);
+  const hasBalance = /(?:전\s*미수금|총\s*미수금|총\s*합계)/.test(text);
+  const totalAmount = daily ? numberValue(daily[1]) : hasBalance ? null : labelled.at(-1) || (currency.length ? Math.max(...currency) : null) || looseAmounts.at(-1) || null;
   const merchantName = lines.find(line => !RECEIPT_METADATA_LINE.test(line) && /[가-힣A-Za-z]/.test(line)) || null;
   const transactionDate = dateMatch ? `${dateMatch[1]}-${dateMatch[2].padStart(2, '0')}-${dateMatch[3].padStart(2, '0')}` : null;
   const missing = [!merchantName && 'merchant_name', !transactionDate && 'transaction_date', !totalAmount && 'total_amount'].filter(Boolean);
   return {
-    documentType: 'receipt', merchantName,
+    documentType: /거래\s*명세서/.test(text) ? 'invoice' : 'receipt', merchantName,
     merchantBusinessNumber: business ? `${business[1]}-${business[2]}-${business[3]}` : null,
     transactionDate, transactionTime: timeMatch ? `${timeMatch[1].padStart(2, '0')}:${timeMatch[2]}` : null,
     totalAmount, supplyAmount: null, vatAmount: null,
@@ -226,6 +229,18 @@ export function parseReceiptText(rawText) {
   };
 }
 
+export function parseVisionResponses(responses) {
+  const texts = responses.map(item => item.fullTextAnnotation?.text || item.textAnnotations?.[0]?.description || '');
+  const extraction = parseReceiptText(texts.join('\n\n--- page ---\n\n'));
+  const tables = responses.map((item, i) => extractSpatialReceipt(item.fullTextAnnotation || {}, texts[i]));
+  const table = tables[0];
+  if (table?.merchantName) extraction.merchantName = table.merchantName;
+  if (table?.merchantBusinessNumber) extraction.merchantBusinessNumber = table.merchantBusinessNumber;
+  const items = tables.flatMap(t => t.lineItems || []);
+  if (items.length) extraction.lineItems = items.map(i => ({ name: i.itemNameRaw, quantity: i.quantity, unit: i.unit, unitPrice: i.unitPrice, amount: i.lineAmount, confidence: i.confidence }));
+  return extraction;
+}
+
 export async function analyzeReceiptImages(imageUrls) {
   const images = [];
   for (const value of imageUrls) images.push(await downloadImage(value));
@@ -233,7 +248,7 @@ export async function analyzeReceiptImages(imageUrls) {
   const rawText = responses.map(item => item.fullTextAnnotation?.text || item.textAnnotations?.[0]?.description || '').filter(Boolean).join('\n\n--- page ---\n\n');
   if (!rawText.trim()) throw Object.assign(new Error('receipt_text_not_found'), { status: 422 });
   return {
-    extraction: parseReceiptText(rawText),
+    extraction: parseVisionResponses(responses),
     imageContentSha256: createHash('sha256').update(Buffer.concat(images.map(item => item.content))).digest('hex'),
     model: 'google-cloud-vision-document-text-detection',
   };
