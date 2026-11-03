@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {"name": "hole-does-not-advance-cursor", "storedSequences": [1, 2, 4], "serverLatestSequence": 4, "expectedLocalContiguousTail": 2},
+    {"name": "filled-hole-advances-through-existing-tail", "storedSequences": [1, 2, 3, 4], "serverLatestSequence": 4, "expectedLocalContiguousTail": 4},
+    {"name": "missing-first-sequence-stays-at-zero", "storedSequences": [2, 3], "serverLatestSequence": 3, "expectedLocalContiguousTail": 0},
+    {"name": "server-latest-never-becomes-cursor", "storedSequences": [1, 2], "serverLatestSequence": 99, "expectedLocalContiguousTail": 2}
+  ]
+}
