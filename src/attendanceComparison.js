@@ -13,7 +13,7 @@ export function buildAttendanceComparisonRows(profile, schedules, policy, calcul
     } : null;
     const calculation = calculate(record, schedule ? [schedule] : [], policy);
     return {
-      date, schedule: row?.[1] || '스케줄 없음', shiftName: row?.[2] || '',
+      date, schedule: row?.[1] || '스케줄 없음', shiftName: row?.[2] || '', record,
       checkedInAt: record?.checked_in_at, checkedOutAt: record?.checked_out_at,
       grossMinutes: calculation.grossMinutes, deductedBreakMinutes: calculation.breakMinutes,
       netMinutes: Math.max(0, calculation.grossMinutes - calculation.breakMinutes),
