@@ -9,6 +9,7 @@ import { buildAttendanceComparisonRows } from './attendanceComparison';
 import { payrollBreakMinutes, usesFixedButterVillaBreak } from './payrollBreakPolicy';
 import { openSchedulePrintView } from './schedulePdf';
 import { OperationsHome, WeeklyFeedback, AttendanceIssueList, CardReviewList } from './features/operations/OperationsFeedback';
+import { correctAttendance } from './features/operations/operationsApi';
 import { attendanceIssues, payrollAttendanceRange, staffTodayStatus } from '../shared/operations.js';
 import { invalidateViewCache, readViewCache, writeViewCache } from './lib/viewCache';
 import { groupStaffByType } from './lib/staffGrouping';
@@ -7370,12 +7371,15 @@ function EmployeeDetail({
   onRefresh,
   canViewPayroll = false,
   canManageSchedule = false,
+  canManageAttendance = false,
+  onCorrectAttendance,
 }) {
   const currentDateKey = useCurrentKoreanDateKey();
   const profile = employee || defaultEmployees[0];
   const [attendanceMonth, setAttendanceMonth] = useState(
     currentDateKey.slice(0, 7),
   );
+  const [attendanceCorrection, setAttendanceCorrection] = useState(null);
   const attendanceComparison = useMemo(
     () =>
       buildAttendanceComparisonRows(
@@ -7757,6 +7761,15 @@ function EmployeeDetail({
                     <em>급여 반영 {formatHours(row.payableMinutes)}</em>
                   )}
                 </div>
+                {canManageAttendance && row.date <= currentDateKey && (
+                  <button
+                    type="button"
+                    className="outline attendance-correction-button"
+                    onClick={() => setAttendanceCorrection(row)}
+                  >
+                    근무시간 수정
+                  </button>
+                )}
               </article>
             ))}
           </div>
@@ -7764,7 +7777,94 @@ function EmployeeDetail({
           <p className="empty-state">이 달의 근무표와 출퇴근 기록이 없어요.</p>
         )}
       </section>
+      {attendanceCorrection && (
+        <Modal
+          title={`${profile.name} · ${attendanceCorrection.date} 근무시간 수정`}
+          variant="attendance-correction-modal"
+          onClose={() => setAttendanceCorrection(null)}
+        >
+          <EmployeeAttendanceCorrectionForm
+            employee={profile}
+            row={attendanceCorrection}
+            onCancel={() => setAttendanceCorrection(null)}
+            onSave={async (values) => {
+              await onCorrectAttendance?.({ employee: profile, row: attendanceCorrection, ...values });
+              setAttendanceCorrection(null);
+            }}
+          />
+        </Modal>
+      )}
     </>
+  );
+}
+
+function EmployeeAttendanceCorrectionForm({ row, onCancel, onSave }) {
+  const toLocalInput = (value, fallback = "") => value
+    ? new Date(Date.parse(value) + 9 * 3_600_000).toISOString().slice(0, 16)
+    : fallback;
+  const [checkedIn, setCheckedIn] = useState(toLocalInput(row.checkedInAt, `${row.date}T09:00`));
+  const [checkedOut, setCheckedOut] = useState(toLocalInput(row.checkedOutAt));
+  const [reason, setReason] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const submit = async (event) => {
+    event.preventDefault();
+    setError("");
+    if (!checkedIn || !checkedIn.startsWith(`${row.date}T`)) {
+      setError("선택한 날짜와 같은 날짜의 출근 시각을 입력해 주세요.");
+      return;
+    }
+    if (checkedOut && new Date(checkedOut) <= new Date(checkedIn)) {
+      setError("퇴근 시각은 출근 시각보다 늦어야 합니다.");
+      return;
+    }
+    if (reason.trim().length < 2) {
+      setError("수정 사유를 2자 이상 입력해 주세요.");
+      return;
+    }
+    if (!confirming) {
+      setConfirming(true);
+      return;
+    }
+    setBusy(true);
+    try {
+      await onSave({ checkedIn, checkedOut, reason: reason.trim() });
+    } catch (nextError) {
+      const message = String(nextError?.message || "");
+      setError(message.includes("attendance_record_changed")
+        ? "다른 관리자가 먼저 수정했습니다. 닫은 뒤 최신 기록을 다시 확인해 주세요."
+        : message.includes("attendance_correction_forbidden")
+          ? "현재 계정에 출퇴근 관리 권한이 없습니다."
+          : nextError?.message || "근무시간을 수정하지 못했습니다.");
+      setConfirming(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form onSubmit={submit}>
+      <p className="modal-text attendance-correction-guide">
+        실제 확인된 출근·퇴근 시각만 입력해 주세요. 기존 값과 수정 사유는 감사 이력에 남고 급여 계산에도 반영됩니다.
+      </p>
+      <div className="attendance-correction-current">
+        <span>기존 기록</span>
+        <b>{formatAttendanceTime(row.checkedInAt)} ~ {formatAttendanceTime(row.checkedOutAt)}</b>
+      </div>
+      <fieldset disabled={busy || confirming}>
+        <div className="form-row">
+          <label>출근 시각<input type="datetime-local" step="60" required max={`${row.date}T23:59`} value={checkedIn} onChange={(event) => setCheckedIn(event.target.value)} /></label>
+          <label>퇴근 시각 (선택)<input type="datetime-local" step="60" value={checkedOut} onChange={(event) => setCheckedOut(event.target.value)} /></label>
+        </div>
+        <label>수정 사유<textarea required minLength="2" maxLength="500" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="예: 직원 확인 후 실제 퇴근 시각으로 정정" /></label>
+      </fieldset>
+      {confirming && <p className="attendance-correction-confirm" role="status">{checkedIn.replace("T", " ")} ~ {checkedOut ? checkedOut.replace("T", " ") : "퇴근 미입력"}으로 저장합니다. 이 작업은 수정 이력에 기록됩니다.</p>}
+      {error && <p className="attendance-correction-error" role="alert">{error}</p>}
+      <div className="modal-actions">
+        <button type="button" className="reject" disabled={busy} onClick={confirming ? () => setConfirming(false) : onCancel}>{confirming ? "다시 수정" : "취소"}</button>
+        <button className="submit" disabled={busy}>{busy ? "저장 중…" : confirming ? "근무시간 저장" : "수정 내용 확인"}</button>
+      </div>
+    </form>
   );
 }
 
@@ -9671,6 +9771,22 @@ function App() {
         ["attendance.manage", "attendance.review_correction"].includes(code),
       ),
   );
+  const canManageAttendance = Boolean(
+    authContext.isOrganizationOwner ||
+      authContext.managementAccount?.permissions?.includes("attendance.manage"),
+  );
+  const correctEmployeeAttendance = async ({ employee, row, checkedIn, checkedOut, reason }) => {
+    await revalidateManagementPermission("attendance.manage");
+    await correctAttendance({
+      organizationId: authContext.membership.organization_id,
+      issue: { employee, date: row.date, record: row.record || null },
+      checkedIn,
+      checkedOut,
+      reason,
+    });
+    await refreshWorkforceInPlace();
+    setToast(`${employee.name}님의 ${row.date} 근무시간을 수정했습니다.`);
+  };
   const canManageEmployees = Boolean(
     authContext.isOrganizationOwner ||
       authContext.managementAccount?.permissions?.includes("employee.manage"),
@@ -9958,6 +10074,8 @@ function App() {
         onRefresh={refreshWorkforceInPlace}
         canViewPayroll={canViewCompensation}
         canManageSchedule={canManageSchedule}
+        canManageAttendance={canManageAttendance}
+        onCorrectAttendance={correctEmployeeAttendance}
       />
     ),
   };
@@ -11161,6 +11279,8 @@ function App() {
                   onRefresh={refreshWorkforceInPlace}
                   canViewPayroll={canViewCompensation}
                   canManageSchedule={canManageSchedule}
+                  canManageAttendance={canManageAttendance}
+                  onCorrectAttendance={correctEmployeeAttendance}
                 />
                 {authContext.isOrganizationOwner && (
                   <StaffAvatarUploader
