@@ -3,10 +3,10 @@ import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import { openPayrollPrintView } from './payrollPdf';
 import { scheduledPayroll } from './payrollComparison';
-import { roundPayableMinutes } from './payrollRounding';
+import { attendanceMinutes, clockMinutes, attendanceMinuteOnWorkDate, payableAttendanceMinutes } from './payrollAttendance';
 import { openAttendanceComparisonPrintView } from './attendanceComparisonPdf';
 import { buildAttendanceComparisonRows } from './attendanceComparison';
-import { payrollBreakMinutes, usesFixedButterVillaBreak } from './payrollBreakPolicy';
+import { usesFixedButterVillaBreak } from './payrollBreakPolicy';
 import { openSchedulePrintView } from './schedulePdf';
 import { OperationsHome, WeeklyFeedback, AttendanceIssueList, CardReviewList } from './features/operations/OperationsFeedback';
 import { attendanceIssues, payrollAttendanceRange, staffTodayStatus } from '../shared/operations.js';
@@ -156,34 +156,6 @@ const formatMoneyField = field => {
 const formatPhone = value => { if (!value) return '미등록'; const digits = String(value).replace(/\D/g, '').replace(/^82/, '0'); return digits.length === 11 ? `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}` : digits.length === 10 ? `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}` : value; };
 const formatHours = minutes => { const value = Math.max(0, Math.round(minutes || 0)); return value < 60 ? `${value}분` : `${Math.floor(value / 60)}시간${value % 60 ? ` ${value % 60}분` : ''}`; };
 const formatAttendanceTime = value => value ? new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Seoul' }).format(new Date(value)) : '-';
-const attendanceMinutes = record => {
-  if (!record?.checked_in_at || !record?.checked_out_at) return 0;
-  return Math.max(0, (new Date(record.checked_out_at).getTime() - new Date(record.checked_in_at).getTime()) / 60000);
-};
-const clockMinutes = value => { const [hour, minute] = String(value || '0:0').split(':').map(Number); return hour * 60 + minute; };
-const attendanceMinuteOnWorkDate = (timestamp, workDate) => {
-  if (!timestamp || !workDate) return 0;
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date(timestamp)).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
-  const actualDate = `${parts.year}-${parts.month}-${parts.day}`;
-  const dayOffset = Math.round((Date.parse(`${actualDate}T00:00:00Z`) - Date.parse(`${workDate}T00:00:00Z`)) / 86400000);
-  return dayOffset * 1440 + Number(parts.hour) * 60 + Number(parts.minute);
-};
-const payableAttendanceMinutes = (record, schedules = [], policy = DEFAULT_LEAVE_POLICY) => {
-  if (!record?.checked_in_at || !record?.checked_out_at) return { grossMinutes: 0, breakMinutes: 0, payableMinutes: 0, schedule: null };
-  const schedule = schedules.find(item => item.staff_id === record.staff_id && item.work_date === record.work_date && !item.is_day_off && item.starts_at && item.ends_at) || null;
-  let grossMinutes = attendanceMinutes(record);
-  if (schedule) {
-    const scheduledStart = clockMinutes(schedule.starts_at); let scheduledEnd = clockMinutes(schedule.ends_at);
-    if (scheduledEnd <= scheduledStart) scheduledEnd += 1440;
-    const actualStart = attendanceMinuteOnWorkDate(record.checked_in_at, record.work_date);
-    const actualEnd = attendanceMinuteOnWorkDate(record.checked_out_at, record.work_date);
-    grossMinutes = Math.max(0, Math.min(actualEnd, scheduledEnd) - Math.max(actualStart, scheduledStart));
-  }
-  const breakMinutes = schedule?.break_paid === true ? 0 : payrollBreakMinutes({ schedule, policy, grossMinutes });
-  const netMinutes = Math.max(0, grossMinutes - breakMinutes);
-  const payableMinutes = roundPayableMinutes(netMinutes, policy);
-  return { grossMinutes, breakMinutes, payableMinutes, schedule };
-};
 const monthlyAttendance = employee => (employee.attendanceHistory || []).filter(record => String(record.work_date || '').startsWith(todayKey.slice(0, 7)));
 const completedWorkDays = employee => monthlyAttendance(employee).filter(record => record.checked_in_at && record.checked_out_at).length;
 const estimatedPayrollFor = employee => employee.pay === '월급제'
@@ -5180,7 +5152,7 @@ function Payroll({
           estimated_total: row.basePay,
           calculation_note:
             row.payType === "hourly"
-              ? `스케줄 범위·휴게 ${row.breakMinutes}분 제외·반올림 정책 적용`
+              ? `${source?.settings?.payroll_include_after_scheduled_end ? "스케줄 시작 이후 실제 퇴근까지" : "스케줄 범위"}·휴게 ${row.breakMinutes}분 제외·반올림 정책 적용`
               : row.payType === "daily"
                 ? "퇴근 완료 일수 기준"
                 : row.payType === "annual"
