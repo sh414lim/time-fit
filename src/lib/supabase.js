@@ -160,7 +160,7 @@ export async function loadWorkforce(organizationId) {
   const canViewCompensation = Boolean(context.isOrganizationOwner || context.managementAccount?.permissions?.includes('employee.compensation.view'));
   const staffColumns = `id,user_id,display_name,department,category_id,job_title,joined_on,phone_e164,avatar_path,sort_order${canViewCompensation ? ',pay_type,hourly_wage,daily_wage,monthly_salary,annual_salary' : ''}`;
   const [staffResult, scheduleResult, leaveResult, attendanceResult, settingsResult, grantsResult, categoriesResult, orderResult] = await requestWithTimeout(Promise.all([
-    allWorkforceRows(() => client.from('timefit_user_staff').select(staffColumns).eq('organization_id', organizationId).order('sort_order').order('created_at').order('id')),
+    allWorkforceRows(() => client.from('timefit_user_staff').select(staffColumns).eq('organization_id', organizationId).eq('worker_type', 'regular').order('sort_order').order('created_at').order('id')),
     allWorkforceRows(() => client.from('timefit_user_work_schedules').select('id,staff_id,work_date,starts_at,ends_at,break_minutes,break_paid,break_starts_at,break_ends_at,shift_name,is_day_off,status,approval_status,submitted_by,submitted_at,reviewed_by,reviewed_at,review_comment,updated_at').eq('organization_id', organizationId).order('work_date').order('id')),
     allWorkforceRows(() => client.from('timefit_user_leave_requests').select('id,staff_id,starts_on,ends_on,leave_type,amount,reason,status,review_comment,created_at').eq('organization_id', organizationId).order('created_at', { ascending: false }).order('id')),
     allWorkforceRows(() => client.from('timefit_user_attendance_records').select('id,staff_id,work_date,checked_in_at,checked_out_at,source,updated_at').eq('organization_id', organizationId).order('work_date', { ascending: false }).order('id')),
@@ -474,6 +474,10 @@ export async function loadFinanceDocuments(organizationId) {
   const { data, error } = await requireClient().from('timefit_user_finance_documents').select('*').eq('organization_id', organizationId).order('created_at', { ascending: false });
   if (error) throw error; return data || [];
 }
+export function safeStorageFileName(name, fallback = 'receipt.jpg') {
+  const normalized = String(name || '').normalize('NFKD').replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^[_\.]+|[_\.]+$/g, '');
+  return normalized || fallback;
+}
 export async function uploadFinanceDocument({ organizationId, documentType, title, file, documentDate, memo, staffId = null, submissionReason = null }) {
   const client = requireClient(); const userId = (await client.auth.getUser()).data.user?.id;
   if (!file?.size) throw new Error('업로드할 파일을 선택해 주세요.');
@@ -487,7 +491,7 @@ export async function uploadFinanceDocument({ organizationId, documentType, titl
     if (duplicateError) throw duplicateError;
     if (duplicate) throw new Error(`이미 등록된 영수증입니다: ${duplicate.title}`);
   }
-  const safeName = file.name.replace(/[^a-zA-Z0-9가-힣._-]/g, '_'); const path = `${organizationId}/${userId || 'manager'}/${Date.now()}-${safeName}`;
+  const safeName = safeStorageFileName(file.name); const path = `${organizationId}/${userId || 'manager'}/${Date.now()}-${safeName}`;
   const { error: uploadError } = await client.storage.from('timefit-finance-documents').upload(path, file, { contentType: file.type || 'application/octet-stream', upsert: false });
   if (uploadError) throw uploadError;
   const { data, error } = await client.from('timefit_user_finance_documents').insert({ organization_id: organizationId, document_type: isReceipt ? 'receipt' : documentType, title, file_name: file.name, storage_path: path, mime_type: file.type || null, file_size: file.size, content_sha256: contentSha256, document_date: documentDate || null, memo: memo || null, uploaded_by: userId, submitted_by_staff_id: staffId, submission_reason: submissionReason }).select().single();
@@ -521,8 +525,8 @@ export async function createReceiptSubmission({ organizationId, files, costCente
   const selected = Array.from(files || []).filter(Boolean);
   if (!selected.length) throw new Error('촬영한 영수증을 선택해 주세요.');
   if (selected.length > 20) throw new Error('영수증은 한 번에 20장까지 올릴 수 있어요.');
-  if (selected.some(file => !['image/jpeg','image/png','image/webp'].includes(String(file.type || '').toLowerCase()))) throw new Error('OCR 처리 전 JPG, PNG 또는 WebP 이미지가 필요합니다.');
-  if (selected.some(file => file.size > 7 * 1024 * 1024) || selected.reduce((sum, file) => sum + file.size, 0) > 60 * 1024 * 1024) throw new Error('OCR용 이미지 한 장은 7MB, 전체는 60MB 이하만 올릴 수 있어요.');
+  if (selected.some(file => !['image/jpeg','image/png','image/webp'].includes(String(file.type || '').toLowerCase()))) throw new Error('AX 분석 전 JPG, PNG 또는 WebP 이미지가 필요합니다.');
+  if (selected.some(file => file.size > 7 * 1024 * 1024) || selected.reduce((sum, file) => sum + file.size, 0) > 60 * 1024 * 1024) throw new Error('AX 분석용 이미지 한 장은 7MB, 전체는 60MB 이하만 올릴 수 있어요.');
   if (!costCenterId) throw new Error('영수증을 사용할 부서·섹션을 선택해 주세요.');
   const hashes = await Promise.all(selected.map(sha256File));
   let contentSha256 = hashes.length === 1 ? hashes[0] : null;
@@ -537,7 +541,7 @@ export async function createReceiptSubmission({ organizationId, files, costCente
     if (duplicate) { const error = new Error('이미 등록된 영수증입니다. 기존 제출 내역을 확인해 주세요.'); error.code = 'duplicate_receipt'; error.documentId = duplicate.id; throw error; }
   }
   const sessionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const paths = selected.map((file, index) => `${organizationId}/${userId || 'employee'}/${sessionId}/${String(index + 1).padStart(2, '0')}-${file.name.replace(/[^a-zA-Z0-9가-힣._-]/g, '_')}`);
+  const paths = selected.map((file, index) => `${organizationId}/${userId || 'employee'}/${sessionId}/${String(index + 1).padStart(2, '0')}-${safeStorageFileName(file.name, `receipt-${index + 1}.jpg`)}`);
   const uploaded = [];
   try {
     for (let index = 0; index < selected.length; index += 1) {
@@ -808,6 +812,17 @@ export async function createMeetingNote(note) {
 export async function tabletAttendance(payload) {
   const { data, error } = await requireClient().rpc('timefit_user_tablet_attendance_v2', { p_device_token: payload.deviceToken, p_phone_last4: String(payload.phoneLast4), p_action: payload.action });
   if (error) throw error; return data;
+}
+export async function dailyWorkerAttendance(payload) {
+  const response = await requestWithTimeout(fetch('/api/daily-worker-attendance', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }), 'daily_worker_attendance');
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.ok) throw new Error(result.error || 'daily_worker_failed');
+  return result.data;
 }
 export async function getTabletDeviceContext(deviceToken) {
   const { data, error } = await requireClient().rpc('timefit_user_tablet_device_context', { p_device_token: deviceToken });
