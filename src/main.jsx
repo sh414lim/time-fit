@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import { openPayrollPrintView } from './payrollPdf';
@@ -27,7 +27,7 @@ import ExpenseLedger from './features/finance/ExpenseLedger';
 import ManualExpenseForm from './features/finance/ManualExpenseForm';
 import DailyWorkerTablet from './features/attendance/DailyWorkerTablet';
 import { prepareReceiptFiles } from './features/finance/receiptQuality';
-import { createReceiptSubmission, loadShortTermAttendance, processReceiptDocument } from './lib/supabase';
+import { createReceiptSubmission, loadShortTermAttendance, loadShortTermWorkerDetail, processReceiptDocument } from './lib/supabase';
 import { acceptEmployeeInvitation, activateTabletDevice, archiveCostCenter, bootstrapTossPlaceConnection, createCorporateCard, createFeedbackItem, createLeaveRequest, createManagementAccount, createManualStaff, createMeetingNote, deleteFinanceDocument, deleteStaffCategory, deleteWorkSchedule, disconnectCorporateCard, ensureManagerOrganization, getAuthContext, getCachedOrganizationSalesDashboard, getManagerTabletOrganization, getOrganizationSettings, getStaticAttendanceQr, getTabletDeviceContext, getTossPlaceConnection, grantStaffLeave, importCardTransactions, importFeedbackItems, inviteEmployeeByCode, isAuthSessionError, loadCardTransactions, loadCorporateCards, loadCostCenters, loadDriveReceiptUploads, loadFeedbackItems, loadFinanceDocuments, loadManagementAccounts, loadMeetingNotes, loadOperationalAlerts, loadOrganizationSalesDashboard, loadPayrollWorkspace, loadStaffCategories, loadStaffSensitiveProfile, loadTabletDevices, loadWorkforce, manageManagementAccount, markOperationalAlertRead, openFinanceDocument, previewTabletLeaveRequest, recordQrAttendance, reviewLeaveRequest, reviewWorkSchedule, revokeTabletDevice, runMonthEndOperations, saveCostCenter, saveCustomTossPlaceCredentials, saveOrganizationSettings, savePayrollContract, savePayrollDraft, saveStaffCategory, saveStaffOrder, saveStaffSensitiveProfile, saveTossPlaceConnection, saveWorkSchedule, saveWorkSchedulesBulk, sendSettlementEmail, signIn, signOut, signUp, supabase, syncOrganizationSales, tabletAttendance, tabletLeaveRequest, updateCorporateCard, updateFeedbackItem, updateStaffPhone, updateStaffProfile, uploadFinanceDocument, uploadReceiptToGoogleDrive, uploadStaffAvatar } from './lib/supabase';
 
 const KOREAN_WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -3176,12 +3176,30 @@ function AttendanceQrDisplay({ organizationId, organizationName, onClose }) {
   return <section className="attendance-qr-panel attendance-qr-print" aria-live="polite"><header><div><span>ATT-02 · 고정 업장 QR</span><h2>{organizationName||'현재 업장'} 출퇴근 QR</h2></div><button className="qr-screen-only" type="button" onClick={onClose} aria-label="QR 표시 닫기">×</button></header>{payload?<div className="attendance-qr-body"><div className="attendance-qr-image">{image?<img src={image} alt={`${organizationName||'현재 업장'} 출퇴근 QR`}/>:<span className="attendance-qr-loading">QR 생성 중…</span>}</div><div className="attendance-qr-copy"><strong>인쇄하거나 매장 태블릿에 표시하세요</strong><p>업장에 한 번 발급된 QR을 계속 사용합니다. 자동 갱신되거나 재발급되지 않으며, 로그인한 직원의 업장 소속은 스캔할 때마다 서버에서 확인됩니다.</p><code>영구 고정 QR · 최초 발급 {new Date(payload.createdAt).toLocaleDateString('ko-KR')}</code><div className="attendance-qr-actions qr-screen-only"><button className="outline" type="button" onClick={()=>window.print()}>인쇄하기</button><button className="outline" type="button" onClick={download}>PNG 저장</button></div></div></div>:<p className="attendance-qr-loading">업장 고정 QR을 준비하고 있어요.</p>}{error&&<p className="attendance-qr-error" role="alert">{error}</p>}<p className="qr-print-caption">직원은 TimeFit 앱에 로그인한 뒤 QR 메뉴에서 스캔해 주세요.</p></section>;
 }
 
-function Attendance({ employees, checkedIn, setCheckedIn, onSelect, canRecordOwnAttendance = false, organizationId, organizationName, canManageQr = true }) {
+function Attendance({ employees, checkedIn, setCheckedIn, onSelect, onRefresh, canRecordOwnAttendance = false, organizationId, organizationName, canManageQr = true }) {
   const currentDateKey = useCurrentKoreanDateKey();
   const attendanceOrganizationId = organizationId || employees[0]?.organizationId;
   const [selectedDate, setSelectedDate] = useState(currentDateKey);
   const [filter, setFilter] = useState('전체');
   const [showQr,setShowQr]=useState(false);
+  const [refreshing,setRefreshing]=useState(false);
+  const refreshRef=useRef(onRefresh);
+  const refreshInFlightRef=useRef(false);
+  useEffect(()=>{refreshRef.current=onRefresh;},[onRefresh]);
+  const refreshAttendance=useCallback(async()=>{
+    if(refreshInFlightRef.current||!refreshRef.current)return;
+    refreshInFlightRef.current=true;setRefreshing(true);
+    try{await refreshRef.current();}catch{/* App에서 오류 안내를 처리한다. */}
+    finally{refreshInFlightRef.current=false;setRefreshing(false);}
+  },[]);
+  useEffect(()=>{
+    const refreshWhenVisible=()=>{if(document.visibilityState==='visible')void refreshAttendance();};
+    void refreshAttendance();
+    const timer=window.setInterval(refreshWhenVisible,15000);
+    window.addEventListener('focus',refreshWhenVisible);
+    document.addEventListener('visibilitychange',refreshWhenVisible);
+    return()=>{window.clearInterval(timer);window.removeEventListener('focus',refreshWhenVisible);document.removeEventListener('visibilitychange',refreshWhenVisible);};
+  },[refreshAttendance]);
   useEffect(() => { setSelectedDate(current => current || currentDateKey); }, [currentDateKey]);
 
   const moveDate = offset => {
@@ -3222,17 +3240,46 @@ function Attendance({ employees, checkedIn, setCheckedIn, onSelect, canRecordOwn
       <article className="missing"><span>미출근</span><strong>{count('미출근')}<small>명</small></strong></article>
     </section>
     <section className="card full-card attendance-management-card">
-      <div className="attendance-date-tools"><button type="button" aria-label="이전 날짜" onClick={() => moveDate(-1)}>‹</button><label><span>조회 날짜</span><input type="date" value={selectedDate} onChange={event => setSelectedDate(event.target.value || currentDateKey)}/></label><button type="button" aria-label="다음 날짜" onClick={() => moveDate(1)}>›</button><button type="button" className="attendance-today" disabled={selectedDate === currentDateKey} onClick={() => setSelectedDate(currentDateKey)}>오늘</button></div>
+      <div className="attendance-date-tools"><button type="button" aria-label="이전 날짜" onClick={() => moveDate(-1)}>‹</button><label><span>조회 날짜</span><input type="date" value={selectedDate} onChange={event => setSelectedDate(event.target.value || currentDateKey)}/></label><button type="button" aria-label="다음 날짜" onClick={() => moveDate(1)}>›</button><button type="button" className="attendance-today" disabled={selectedDate === currentDateKey} onClick={() => setSelectedDate(currentDateKey)}>오늘</button><button type="button" className="attendance-refresh" disabled={refreshing} onClick={()=>void refreshAttendance()}>{refreshing?'갱신 중…':'↻ 최신 기록'}</button></div>
       <div className="tabs attendance-tabs">{['전체','근무 중','퇴근 완료','지각','미출근','예정','휴무'].map(value => <button className={filter === value ? 'selected' : ''} onClick={() => setFilter(value)} key={value}>{value}<b>{value === '전체' ? rows.length : count(value)}</b></button>)}</div>
       <div className="attendance-table-wrap"><table className="attendance-status-table"><thead><tr><th>직원</th><th>구분</th><th>예정 근무</th><th>출근</th><th>퇴근</th><th>상태</th><th>지각</th><th>실제 근무</th><th><span className="sr-only">관리</span></th></tr></thead><tbody>{filteredRows.map(({ employee, attendance, planned, status, lateMinutes, worked }) => <tr key={employee.id} onClick={() => onSelect(employee)}><td><span className="attendance-person"><Avatar name={employee.name} color={employee.color}/><b>{employee.name}<small>{employee.role}</small></b></span></td><td><span className="attendance-team" style={{ '--team-color': employee.categoryColor }}>{employee.team}</span></td><td>{planned}</td><td className="attendance-time-value">{formatAttendanceTime(attendance?.checked_in_at)}</td><td className="attendance-time-value">{formatAttendanceTime(attendance?.checked_out_at)}</td><td><Chip type={statusType(status)}>{status}</Chip></td><td className={lateMinutes ? 'attendance-late-value' : ''}>{lateMinutes ? `${lateMinutes}분` : '-'}</td><td>{worked}</td><td><button type="button" className="outline" onClick={event => { event.stopPropagation(); onSelect(employee); }}>상세</button></td></tr>)}</tbody></table>{!filteredRows.length && <div className="attendance-empty">선택한 상태의 직원이 없습니다.</div>}</div>
     </section>
   </>;
 }
 
+function ShortTermWorkerDetail({ organizationId, record, onClose }) {
+  const [detail, setDetail] = useState(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let active = true;
+    loadShortTermWorkerDetail(organizationId, record.id)
+      .then(value => { if (active) setDetail(value); })
+      .catch(reason => { if (active) setError(reason.message || '상세정보를 불러오지 못했습니다.'); });
+    return () => { active = false; };
+  }, [organizationId, record.id]);
+  const value = detail || record;
+  return <Modal title="단기직원 상세" onClose={onClose} variant="short-term-worker-modal">
+    {error ? <div className="empty-schedule"><b>{error}</b></div> : !detail ? <LoadingBar label="신원정보를 안전하게 불러오는 중…"/> : <>
+      <div className="short-term-worker-profile"><Avatar name={value.display_name} color="blue" team="단기직원"/><div><b>{value.display_name}</b><span>단기직원</span></div></div>
+      <dl className="short-term-worker-detail-list">
+        <div><dt>이름</dt><dd>{value.display_name}</dd></div>
+        <div><dt>주민등록번호</dt><dd>{value.resident_registration_number}</dd></div>
+        <div><dt>전화번호</dt><dd>{value.phone_number}</dd></div>
+        <div><dt>근무 날짜</dt><dd>{value.work_date}</dd></div>
+        <div><dt>출근 시간</dt><dd>{formatAttendanceTime(value.checked_in_at)}</dd></div>
+        <div><dt>퇴근 시간</dt><dd>{formatAttendanceTime(value.checked_out_at)}</dd></div>
+        <div><dt>근무 시간</dt><dd>{value.checked_out_at ? formatHours(attendanceMinutes(value)) : '근무 중'}</dd></div>
+      </dl>
+      <p className="short-term-worker-sensitive-note">관리자 권한으로 조회한 개인정보입니다.</p>
+    </>}
+  </Modal>;
+}
+
 function ShortTermWorkers({ organizationId }) {
   const currentDateKey = useCurrentKoreanDateKey();
   const [selectedDate, setSelectedDate] = useState(currentDateKey);
   const [records, setRecords] = useState([]);
+  const [selectedRecord, setSelectedRecord] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const load = () => {
@@ -3241,7 +3288,7 @@ function ShortTermWorkers({ organizationId }) {
     setError('');
     loadShortTermAttendance(organizationId, { from: selectedDate, to: selectedDate })
       .then(setRecords)
-      .catch(() => setError('단기직원 근무기록을 불러오지 못했어요.'))
+      .catch(reason => setError(reason.message || '단기직원 근무기록을 불러오지 못했어요.'))
       .finally(() => setLoading(false));
   };
   useEffect(load, [organizationId, selectedDate]);
@@ -3276,24 +3323,25 @@ function ShortTermWorkers({ organizationId }) {
         <button type="button" className="attendance-today" disabled={selectedDate === currentDateKey} onClick={() => setSelectedDate(currentDateKey)}>오늘</button>
       </div>
       {loading ? <LoadingBar label="단기직원 근무기록을 불러오는 중…"/> : error ? <div className="empty-schedule"><b>{error}</b><button type="button" className="outline" onClick={load}>다시 시도</button></div> : <div className="attendance-table-wrap">
-        <table className="attendance-status-table">
-          <thead><tr><th>단기직원</th><th>연락처</th><th>근무일</th><th>출근</th><th>퇴근</th><th>근무시간</th><th>상태</th></tr></thead>
+        <table className="attendance-status-table short-term-worker-table">
+          <thead><tr><th>단기직원</th><th>연락처</th><th>근무일</th><th>출근</th><th>퇴근</th><th>근무시간</th><th>상태</th><th><span className="sr-only">관리</span></th></tr></thead>
           <tbody>{records.map(record => {
             const status = statusFor(record);
-            return <tr key={record.id}>
+            return <tr key={record.id} onClick={() => setSelectedRecord(record)}>
               <td><span className="attendance-person"><Avatar name={record.display_name} color="blue" team="단기직원"/><b>{record.display_name}<small>단기직원</small></b></span></td>
-              <td>{record.phone_mask}</td>
+              <td>{record.phone_number}</td>
               <td>{record.work_date}</td>
               <td className="attendance-time-value">{formatAttendanceTime(record.checked_in_at)}</td>
               <td className="attendance-time-value">{formatAttendanceTime(record.checked_out_at)}</td>
               <td>{record.checked_out_at ? formatHours(attendanceMinutes(record)) : '-'}</td>
-              <td><Chip type={status === '확인 필요' ? 'orange' : 'green'}>{status}</Chip></td>
+              <td><Chip type={status === '확인 필요' ? 'orange' : 'green'}>{status}</Chip></td><td><button type="button" className="outline" onClick={event => { event.stopPropagation(); setSelectedRecord(record); }}>상세</button></td>
             </tr>;
           })}</tbody>
         </table>
         {!records.length && <div className="attendance-empty">선택한 날짜의 단기직원 근무기록이 없습니다.</div>}
       </div>}
     </section>
+    {selectedRecord && <ShortTermWorkerDetail organizationId={organizationId} record={selectedRecord} onClose={() => setSelectedRecord(null)}/>}
   </>;
 }
 
@@ -9243,6 +9291,11 @@ function App() {
   const [navigationContext, setNavigationContext] = useState({});
   const [mode, setMode] = useState("manager");
   const [active, setActive] = useState("dashboard");
+  const [visitedScreens, setVisitedScreens] = useState({
+    manager: ["dashboard"],
+    employee: ["employeeHome"],
+  });
+  const visitedScreenScopeRef = useRef("");
   const [managerGroup, setManagerGroup] = useState("operations");
   const [employees, setEmployees] = useState(supabase ? [] : defaultEmployees);
   const [schedules, setSchedules] = useState(
@@ -9393,7 +9446,8 @@ function App() {
             : accountRole === "manager"
               ? "manager"
               : "employee";
-          setMode(nextMode);
+          if (isLinkedEmployeeManager) setMode(nextMode);
+          else setMode(accountRole === "manager" ? "manager" : "employee");
           if (isNewAccountContext)
             setActive(nextMode === "manager" ? "dashboard" : "employeeHome");
         }
@@ -9958,6 +10012,7 @@ function App() {
         checkedIn={checkedIn}
         setCheckedIn={setCheckedIn}
         onSelect={openEmployeeDetail}
+        onRefresh={refreshWorkforceInPlace}
         organizationId={authContext.membership?.organization_id}
         organizationName={
           authContext.membership?.timefit_user_organizations?.name
@@ -10280,10 +10335,45 @@ function App() {
           ["more", "전체", "☰"],
         ]
       : employeeNav;
-  const screenContent = (mode === "manager" ? managerContent : employeeContent)[
-    active
-  ];
-  const content = screenContent;
+  const screenContentByMode =
+    mode === "manager" ? managerContent : employeeContent;
+  const visitedScreenScope = `${authContext.session?.user?.id || "guest"}:${
+    authContext.membership?.organization_id || "none"
+  }`;
+  useEffect(() => {
+    setVisitedScreens((current) => {
+      if (visitedScreenScopeRef.current !== visitedScreenScope) {
+        visitedScreenScopeRef.current = visitedScreenScope;
+        return {
+          manager: mode === "manager" ? [active] : ["dashboard"],
+          employee: mode === "employee" ? [active] : ["employeeHome"],
+        };
+      }
+      if (current[mode].includes(active)) return current;
+      return { ...current, [mode]: [...current[mode], active] };
+    });
+  }, [active, mode, visitedScreenScope]);
+  const retainedScreenIds =
+    visitedScreenScopeRef.current === visitedScreenScope
+      ? visitedScreens[mode] || []
+      : [];
+  const mountedScreenIds = Array.from(
+    new Set([...retainedScreenIds, active]),
+  ).filter((id) => screenContentByMode[id] !== undefined);
+  const content = (
+    <>
+      {mountedScreenIds.map((id) => (
+        <div
+          className="persistent-screen"
+          data-screen={id}
+          hidden={id !== active}
+          key={`${mode}:${id}`}
+        >
+          {screenContentByMode[id]}
+        </div>
+      ))}
+    </>
+  );
   useEffect(() => {
     if (mode !== "manager") return;
     const group = managerMenuGroups.find((item) => item.items.includes(active));
