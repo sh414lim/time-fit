@@ -56,7 +56,7 @@ test('인증된 제출자의 AX 성공 결과를 저장하고 감사 로그를 �
     if (value === 'https://ax.example.com/api/timefit/v1/receipt-sessions') {
       assert.equal(options.redirect, 'error');
       assert.equal(options.headers['X-Timefit-Ax-Key'], 'a'.repeat(32));
-      return jsonResponse({ state: 'SUCCEEDED', extraction: { merchantName: '상점', transactionDate: '2026-10-08', totalAmount: 12000, rawText: '영수증' }, imageContentSha256: 'abc' });
+      return jsonResponse({ state: 'SUCCEEDED', provider: 'codex_image', model: 'codex-cli', extraction: { merchantName: '상점', transactionDate: '2026-10-08', totalAmount: 12000, rawText: '영수증' }, imageContentSha256: 'abc' });
     }
     if (value.includes('/timefit_user_finance_documents?') && options.method === 'PATCH') return jsonResponse(null);
     if (value.endsWith('/rest/v1/timefit_user_expense_audit_logs')) return jsonResponse(null, 201);
@@ -134,7 +134,7 @@ test('위임 관리자는 허용된 비용센터 밖의 영수증을 분석할 �
     if (value.includes('/timefit_user_cost_centers?')) return jsonResponse([{ id: 'center-2', parent_id: null }]);
     if (value === 'https://ax.example.com/api/timefit/v1/receipt-sessions') {
       axRequested = true;
-      return jsonResponse({ state: 'SUCCEEDED', extraction: {} });
+      return jsonResponse({ state: 'SUCCEEDED', provider: 'codex_image', model: 'codex-cli', extraction: {} });
     }
     throw new Error(`unexpected_fetch:${value}`);
   });

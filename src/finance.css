@@ -107,6 +107,8 @@
 .manager .content .outline:disabled { cursor: not-allowed; opacity: .48; box-shadow: none; }
 
 .manager .content .pay-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 18px 0; }
+.manager .content .payroll-summary-top { margin-top: 0; margin-bottom: 18px; }
+.manager .content .payroll-total-card strong { color: var(--finance-blue); font-size: 32px; }
 .manager .content .pay-cards .card {
   position: relative;
   min-height: 144px;

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["documentType", "merchantName", "merchantBusinessNumber", "transactionDate", "transactionTime", "totalAmount", "approvalNumber", "cardLast4", "currency", "rawText", "lineItems", "confidence", "warnings"],
+  "properties": {
+    "documentType": { "type": "string", "enum": ["receipt", "invoice", "sales_slip", "unknown"] },
+    "merchantName": { "type": ["string", "null"] },
+    "merchantBusinessNumber": { "type": ["string", "null"] },
+    "transactionDate": { "type": ["string", "null"] },
+    "transactionTime": { "type": ["string", "null"] },
+    "totalAmount": { "type": ["integer", "null"], "minimum": 0 },
+    "approvalNumber": { "type": ["string", "null"] },
+    "cardLast4": { "type": ["string", "null"] },
+    "currency": { "type": "string", "enum": ["KRW", "UNKNOWN"] },
+    "rawText": { "type": "string" },
+    "lineItems": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "quantity", "unitPrice", "amount"],
+        "properties": {
+          "name": { "type": "string" },
+          "quantity": { "type": ["number", "null"], "minimum": 0 },
+          "unitPrice": { "type": ["integer", "null"], "minimum": 0 },
+          "amount": { "type": ["integer", "null"], "minimum": 0 }
+        }
+      }
+    },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "warnings": { "type": "array", "items": { "type": "string" }, "maxItems": 20 }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "bases": {
+    "message": {
+      "schemaVersion": 1,
+      "eventId": "11000000-0000-4000-8000-000000000001",
+      "eventType": "message.created",
+      "conversationId": "22000000-0000-4000-8000-000000000001",
+      "sequence": 1,
+      "messageId": "33000000-0000-4000-8000-000000000001",
+      "occurredAt": "2026-10-16T01:00:00.000Z"
+    },
+    "conversation": {
+      "schemaVersion": 1,
+      "eventId": "11000000-0000-4000-8000-000000000002",
+      "eventType": "conversation.updated",
+      "conversationId": "22000000-0000-4000-8000-000000000001",
+      "occurredAt": "2026-10-16T01:01:00.000Z"
+    },
+    "unknown": {
+      "schemaVersion": 1,
+      "eventId": "11000000-0000-4000-8000-000000000003",
+      "eventType": "conversation.future",
+      "conversationId": "22000000-0000-4000-8000-000000000001",
+      "occurredAt": "2026-10-16T01:02:00.000Z"
+    }
+  },
+  "cases": [
+    {"name": "missing-schema-version", "base": "message", "remove": ["schemaVersion"], "expectation": "contract_invalid"},
+    {"name": "null-schema-version", "base": "message", "set": {"schemaVersion": null}, "expectation": "contract_invalid"},
+    {"name": "missing-event-id", "base": "message", "remove": ["eventId"], "expectation": "contract_invalid"},
+    {"name": "null-event-id", "base": "message", "set": {"eventId": null}, "expectation": "contract_invalid"},
+    {"name": "missing-event-type", "base": "message", "remove": ["eventType"], "expectation": "contract_invalid"},
+    {"name": "null-event-type", "base": "message", "set": {"eventType": null}, "expectation": "contract_invalid"},
+    {"name": "missing-conversation-id", "base": "message", "remove": ["conversationId"], "expectation": "contract_invalid"},
+    {"name": "null-conversation-id", "base": "message", "set": {"conversationId": null}, "expectation": "contract_invalid"},
+    {"name": "missing-occurred-at", "base": "message", "remove": ["occurredAt"], "expectation": "contract_invalid"},
+    {"name": "null-occurred-at", "base": "message", "set": {"occurredAt": null}, "expectation": "contract_invalid"},
+    {"name": "missing-message-id", "base": "message", "remove": ["messageId"], "expectation": "contract_invalid"},
+    {"name": "null-message-id", "base": "message", "set": {"messageId": null}, "expectation": "contract_invalid"},
+    {"name": "missing-sequence", "base": "message", "remove": ["sequence"], "expectation": "contract_invalid"},
+    {"name": "null-sequence", "base": "message", "set": {"sequence": null}, "expectation": "contract_invalid"},
+    {"name": "invalid-event-id-uuid", "base": "message", "set": {"eventId": "not-a-uuid"}, "expectation": "contract_invalid"},
+    {"name": "invalid-conversation-id-uuid", "base": "message", "set": {"conversationId": "not-a-uuid"}, "expectation": "contract_invalid"},
+    {"name": "invalid-message-id-uuid", "base": "message", "set": {"messageId": "not-a-uuid"}, "expectation": "contract_invalid"},
+    {"name": "invalid-occurred-at", "base": "message", "set": {"occurredAt": "2026-99-99"}, "expectation": "contract_invalid"},
+    {"name": "sequence-zero", "base": "message", "set": {"sequence": 0}, "expectation": "contract_invalid"},
+    {"name": "sequence-fraction", "base": "message", "set": {"sequence": 1.5}, "expectation": "contract_invalid"},
+    {"name": "sequence-string", "base": "message", "set": {"sequence": "1"}, "expectation": "contract_invalid"},
+    {"name": "schema-version-two", "base": "message", "set": {"schemaVersion": 2}, "expectation": "unsupported_schema_version"},
+    {"name": "conversation-null-message-id-forbidden", "base": "conversation", "set": {"messageId": null}, "expectation": "contract_invalid"},
+    {"name": "conversation-message-id-forbidden", "base": "conversation", "set": {"messageId": "33000000-0000-4000-8000-000000000002"}, "expectation": "contract_invalid"},
+    {"name": "conversation-null-sequence-forbidden", "base": "conversation", "set": {"sequence": null}, "expectation": "contract_invalid"},
+    {"name": "conversation-sequence-forbidden", "base": "conversation", "set": {"sequence": 2}, "expectation": "contract_invalid"},
+    {"name": "known-unknown-optional-allowed", "base": "conversation", "set": {"futureOptionalField": {"ignored": true}}, "expectation": "valid_known", "actions": ["get_conversation"]},
+    {"name": "unknown-event-valid-envelope", "base": "unknown", "set": {"futureRequiredByNewProducer": "ignored-by-v1"}, "expectation": "valid_unknown", "actions": ["get_conversation"]},
+    {"name": "unknown-event-missing-required-envelope", "base": "unknown", "remove": ["conversationId"], "expectation": "contract_invalid"},
+    {"name": "unknown-event-null-required-envelope", "base": "unknown", "set": {"occurredAt": null}, "expectation": "contract_invalid"}
+  ]
+}

@@ -1,5 +1,6 @@
 import { authorizeFinance, canAccessFinanceCostCenter, financeError, financeRest, financeServerConfigured, methodNotAllowed, serviceHeaders } from './_finance-server.js';
 import { recoverStaleReceiptRuns } from './receipt-process.js';
+import { loadLatestReceiptLines } from '../domain/receipt-latest.js';
 import { expenseAmountError } from '../domain/expense-amount-validation.js';
 
 async function userRpc(token, name, body) {
@@ -45,8 +46,8 @@ export default async function handler(req, res) {
       const documentIds = documents.map(item => item.id);
       const matches = documentIds.length ? await financeRest(`timefit_user_expense_matches?organization_id=eq.${encodeURIComponent(organizationId)}&document_id=in.(${documentIds.map(encodeURIComponent).join(',')})&select=*,expense:timefit_user_expenses(*),transaction:timefit_user_card_transaction_groups(*,card:timefit_user_corporate_cards(issuer,nickname,last4))&order=score.desc`) : [];
       const sources = documentIds.length ? await financeRest(`timefit_user_expense_sources?organization_id=eq.${encodeURIComponent(organizationId)}&source_type=eq.receipt&source_id=in.(${documentIds.map(encodeURIComponent).join(',')})&select=source_id,expense:timefit_user_expenses(*)`) : [];
-      const lines = documentIds.length ? await financeRest(`timefit_user_receipt_line_items?document_id=in.(${documentIds.map(encodeURIComponent).join(',')})&select=id,document_id,line_number,item_name_raw,item_name_normalized,quantity,unit,unit_price,discount_amount,line_amount,tax_type,confidence&order=line_number.asc`) : [];
-      return res.status(200).json({ ok: true, documents: documents.map(document => ({ ...document, expense: sources.find(source => source.source_id === document.id)?.expense || null, matches: matches.filter(match => match.document_id === document.id), lineItems: lines.filter(line => line.document_id === document.id) })) });
+      const currentLines = (await Promise.all(documentIds.map(id => loadLatestReceiptLines(id, financeRest)))).flat();
+      return res.status(200).json({ ok: true, documents: documents.map(document => ({ ...document, expense: sources.find(source => source.source_id === document.id)?.expense || null, matches: matches.filter(match => match.document_id === document.id), lineItems: currentLines.filter(line => line.document_id === document.id) })) });
     }
 
     if (req.method === 'PATCH') {
