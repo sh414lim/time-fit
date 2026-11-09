@@ -4,6 +4,7 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import { pathToFileURL } from 'node:url';
+import { analyzeWithLlm, analyzeWithCodex } from './receipt-llm.mjs';
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -229,13 +230,12 @@ export function parseReceiptText(rawText) {
 export async function analyzeReceiptImages(imageUrls) {
   const images = [];
   for (const value of imageUrls) images.push(await downloadImage(value));
-  const responses = await visionAnnotations(images);
-  const rawText = responses.map(item => item.fullTextAnnotation?.text || item.textAnnotations?.[0]?.description || '').filter(Boolean).join('\n\n--- page ---\n\n');
-  if (!rawText.trim()) throw Object.assign(new Error('receipt_text_not_found'), { status: 422 });
+  const backend = process.env.TIMEFIT_AX_LLM_BACKEND || 'openai';
+  if (!['openai','codex'].includes(backend)) throw new Error('receipt_llm_backend_invalid');
+  const result = await (backend === 'codex' ? analyzeWithCodex(images) : analyzeWithLlm(images));
   return {
-    extraction: parseReceiptText(rawText),
+    ...result,
     imageContentSha256: createHash('sha256').update(Buffer.concat(images.map(item => item.content))).digest('hex'),
-    model: 'google-cloud-vision-document-text-detection',
   };
 }
 
@@ -359,7 +359,7 @@ function defaultIdempotencyStore() {
 export function createTimefitAxServer({ transportKey = process.env.TIMEFIT_AX_TRANSPORT_KEY, analyzeImages = analyzeReceiptImages, idempotencyStore = defaultIdempotencyStore() } = {}) {
   if (!transportKey || transportKey.length < 32) throw new Error('TIMEFIT_AX_TRANSPORT_KEY must contain at least 32 characters');
   return http.createServer(async (req, res) => {
-    if (req.method === 'GET' && (req.url === '/health' || req.url === '/healthz')) return json(res, 200, { ok: true, service: 'timefit-ax', provider: 'google_cloud_vision' });
+    if (req.method === 'GET' && (req.url === '/health' || req.url === '/healthz')) return json(res, 200, { ok: true, service: 'timefit-ax', provider: (process.env.TIMEFIT_AX_LLM_BACKEND || 'openai') === 'codex' ? 'codex_image' : 'openai_image' });
     if (req.method !== 'POST' || req.url !== '/api/timefit/v1/receipt-sessions') return json(res, 404, { state: 'FAILED', errorCode: 'not_found' });
     if (!safeEqual(req.headers['x-timefit-ax-key'], transportKey)) return json(res, 401, { state: 'FAILED', errorCode: 'unauthorized' });
     let claim;
@@ -374,7 +374,7 @@ export function createTimefitAxServer({ transportKey = process.env.TIMEFIT_AX_TR
       if (claim.state === 'pending') return json(res, 409, { state: 'FAILED', errorCode: 'request_in_progress' });
       if (claim.state !== 'claimed') throw Object.assign(new Error('idempotency_store_invalid'), { status: 503 });
       const result = await analyzeImages(input.imageUrls);
-      const payload = { requestId: input.requestId, state: 'SUCCEEDED', extraction: result.extraction, imageContentSha256: result.imageContentSha256, model: result.model };
+      const payload = { requestId: input.requestId, state: 'SUCCEEDED', extraction: result.extraction, imageContentSha256: result.imageContentSha256, provider: result.provider, model: result.model };
       await idempotencyStore.complete({ requestId: input.requestId, fingerprint, owner: claim.owner, updateTime: claim.updateTime, payload });
       console.info('timefit_ax_succeeded', { requestId: input.requestId, organizationId: input.organizationId, documentId: input.documentId, imageCount: input.imageUrls.length });
       return json(res, 200, payload);

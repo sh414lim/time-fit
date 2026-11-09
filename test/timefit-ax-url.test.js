@@ -58,7 +58,7 @@ test('Timefit AX extraction is normalized for the existing receipt pipeline', ()
     currency: 'KRW', confidence: 0.9, warnings: ['부가세 확인 필요'],
     lineItems: [{ name: '아메리카노', quantity: 2, unitPrice: 6000, amount: 12000 }],
   });
-  assert.equal(result.extractionProvider, 'timefit_ax_codex');
+  assert.equal(result.extractionProvider, 'timefit_ax_unknown');
   assert.equal(result.merchantName, '테스트 상점');
   assert.equal(result.lineItems[0].itemNameRaw, '아메리카노');
   assert.equal(result.lineItems[0].lineAmount, 12000);
@@ -84,7 +84,7 @@ test('Timefit AX receives only server-generated signed document URLs', async () 
     calls.push({ url: String(url), options });
     if (calls.length === 1) return new Response(JSON.stringify({ signedURL: '/object/sign/timefit-finance-documents/org/receipt.jpg?token=signed' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     return new Response(JSON.stringify({
-      requestId: 'receipt:doc-1:run-1', state: 'SUCCEEDED', imageContentSha256: 'abc123',
+      requestId: 'receipt:doc-1:run-1', state: 'SUCCEEDED', provider: 'codex_image', model: 'codex-cli', imageContentSha256: 'abc123',
       extraction: {
         documentType: 'receipt', merchantName: '상점', merchantBusinessNumber: null, transactionDate: '2026-10-09', transactionTime: null,
         totalAmount: 5000, approvalNumber: null, cardLast4: null, currency: 'KRW', rawText: '상점\n5,000',

@@ -1,6 +1,6 @@
 import { MAX_SINGLE_EXPENSE_AMOUNT } from './expense-amount-validation.js';
 
-const amount = value => Number.isFinite(Number(value)) ? Math.round(Number(value)) : null;
+const amount = value => value === null || value === undefined || value === '' ? null : Number.isFinite(Number(value)) ? Math.round(Number(value)) : null;
 
 export function receiptValidation(extracted = {}) {
   const issues = [];
@@ -9,6 +9,7 @@ export function receiptValidation(extracted = {}) {
   const vatAmount = amount(extracted.vatAmount);
   const taxFreeAmount = amount(extracted.taxFreeAmount) || 0;
   const lineItemTotal = (extracted.lineItems || []).reduce((sum, item) => sum + (amount(item.lineAmount) || 0), 0);
+  if (extracted.documentType === 'invoice' && !extracted.lineItems?.length) issues.push({code:'invoice_items_missing',field:'lineItems',severity:'required'});
 
   if (!extracted.merchantName) issues.push({ code: 'merchant_missing', field: 'merchantName', severity: 'required' });
   if (!/^20\d{2}-\d{2}-\d{2}$/.test(extracted.transactionDate || '')) issues.push({ code: 'date_missing', field: 'transactionDate', severity: 'required' });
@@ -20,15 +21,16 @@ export function receiptValidation(extracted = {}) {
   const lineItemDifference = totalAmount === null ? null : totalAmount - lineItemTotal;
   if (lineItemTotal > 0 && lineItemDifference !== 0) issues.push({ code: 'line_item_total_mismatch', field: 'lineItems', severity: 'review', difference: lineItemDifference });
   for (const [index, item] of (extracted.lineItems || []).entries()) {
-    const quantity = Number(item.quantity); const unitPrice = amount(item.unitPrice); const lineAmount = amount(item.lineAmount);
+    const quantity = item.quantity == null ? NaN : Number(item.quantity); const unitPrice = amount(item.unitPrice); const lineAmount = amount(item.lineAmount);
+    if (lineAmount === null || (Number.isFinite(quantity) !== (unitPrice !== null)) || (extracted.documentType === 'invoice' && (!Number.isFinite(quantity) || unitPrice === null))) issues.push({code:'line_item_incomplete',field:'lineItems',severity:'required',lineNumber:item.lineNumber || index+1});
     if (Number.isFinite(quantity) && unitPrice !== null && lineAmount !== null && Math.abs(quantity * unitPrice - lineAmount) >= 1) issues.push({ code: 'line_item_arithmetic_mismatch', field: 'lineItems', severity: 'review', lineNumber: item.lineNumber || index + 1, expected: Math.round(quantity * unitPrice), actual: lineAmount });
   }
   for (const [field, confidence] of Object.entries(extracted.fieldConfidence || {})) {
     if (Number(confidence) < 0.7) issues.push({ code: 'low_confidence', field, severity: 'review', confidence: Number(confidence) || 0 });
   }
   return {
-    validForManagerReview: !issues.some(issue => issue.severity === 'required'),
-    requiresSubmitterReview: issues.some(issue => issue.severity === 'required' || ['merchantName','transactionDate','totalAmount'].includes(issue.field)),
+    validForManagerReview: !issues.some(issue => issue.severity === 'required' || issue.field === 'lineItems'),
+    requiresSubmitterReview: issues.some(issue => issue.severity === 'required' || ['merchantName','transactionDate','totalAmount','lineItems'].includes(issue.field)),
     lineItemTotal,
     lineItemDifference,
     issues,
