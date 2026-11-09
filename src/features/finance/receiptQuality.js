@@ -36,7 +36,7 @@ export async function inspectReceiptImage(file) {
   finally { bitmap?.close?.(); }
 }
 
-export const RECEIPT_OCR_MAX_BYTES = 7 * 1024 * 1024;
+export const RECEIPT_AX_MAX_BYTES = 7 * 1024 * 1024;
 const RECEIPT_MAX_DIMENSION = 2600;
 const RECEIPT_INPUT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
 
@@ -52,7 +52,7 @@ async function heicToBlob(file) {
 
 async function optimizeReceiptImage(file) {
   if (!RECEIPT_INPUT_TYPES.has(String(file?.type || '').toLowerCase()) && !isHeic(file)) throw new Error('JPG, PNG, WebP 또는 HEIC 이미지만 올릴 수 있어요.');
-  if (!isHeic(file) && file.size <= RECEIPT_OCR_MAX_BYTES) return file;
+  if (!isHeic(file) && file.size <= RECEIPT_AX_MAX_BYTES) return file;
   if (typeof createImageBitmap !== 'function' || typeof document === 'undefined') throw new Error('큰 영수증 이미지 변환을 지원하지 않는 브라우저입니다. 사진 크기를 줄이거나 최신 브라우저에서 다시 시도해 주세요.');
   const source = isHeic(file) ? await heicToBlob(file) : file;
   let bitmap;
@@ -67,9 +67,9 @@ async function optimizeReceiptImage(file) {
     let blob;
     for (const quality of [0.9, 0.82, 0.74, 0.66, 0.58]) {
       blob = await canvasBlob(canvas, quality);
-      if (blob.size <= RECEIPT_OCR_MAX_BYTES) break;
+      if (blob.size <= RECEIPT_AX_MAX_BYTES) break;
     }
-    if (!blob || blob.size > RECEIPT_OCR_MAX_BYTES) throw new Error('이미지 용량을 줄이지 못했습니다. 사진을 나누거나 해상도를 낮춰 주세요.');
+    if (!blob || blob.size > RECEIPT_AX_MAX_BYTES) throw new Error('이미지 용량을 줄이지 못했습니다. 사진을 나누거나 해상도를 낮춰 주세요.');
     return new File([blob], String(file.name || 'receipt').replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg', lastModified: file.lastModified || Date.now() });
   } catch (error) {
     if (isHeic(file)) throw new Error('HEIC 사진을 변환하지 못했습니다. 기기에서 JPG로 저장한 뒤 다시 선택해 주세요.');

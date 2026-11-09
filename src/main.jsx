@@ -2,17 +2,20 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import { openPayrollPrintView } from './payrollPdf';
+import { downloadPayrollWorkbook } from './payrollExcel';
 import { scheduledPayroll } from './payrollComparison';
-import { roundPayableMinutes } from './payrollRounding';
+import { attendanceMinutes, clockMinutes, attendanceMinuteOnWorkDate, payableAttendanceMinutes } from './payrollAttendance';
 import { openAttendanceComparisonPrintView } from './attendanceComparisonPdf';
 import { buildAttendanceComparisonRows } from './attendanceComparison';
-import { payrollBreakMinutes, usesFixedButterVillaBreak } from './payrollBreakPolicy';
+import { usesFixedButterVillaBreak } from './payrollBreakPolicy';
+import { hasPayrollWorkday, isVisibleAttendanceDay } from './payrollVisibility';
 import { openSchedulePrintView } from './schedulePdf';
 import { OperationsHome, WeeklyFeedback, AttendanceIssueList, CardReviewList } from './features/operations/OperationsFeedback';
 import { correctAttendance } from './features/operations/operationsApi';
 import { attendanceIssues, payrollAttendanceRange, staffTodayStatus } from '../shared/operations.js';
 import { invalidateViewCache, readViewCache, writeViewCache } from './lib/viewCache';
-import { groupStaffByType } from './lib/staffGrouping';
+import { groupStaffByPayType, groupStaffByPayTypeAndWorkArea } from './lib/staffGrouping';
+import { EMPLOYEE_ATTENDANCE_ACTIONS, attendanceActionForEmployee, attendanceActionLabel } from './lib/employeeAttendanceState';
 import { hasCurrentManagementPermission, managementActionErrorMessage, MANAGEMENT_ACCESS_CHANGED_MESSAGE } from './lib/managementAccess';
 import CardConnectionWizard from './features/finance/CardConnectionWizard';
 import ExpenseReviewQueue from './features/finance/ExpenseReviewQueue';
@@ -22,11 +25,10 @@ import EmployeeReceiptSubmission from './features/finance/EmployeeReceiptSubmiss
 import ExpenseReminderSettings from './features/finance/ExpenseReminderSettings';
 import ExpenseLedger from './features/finance/ExpenseLedger';
 import ManualExpenseForm from './features/finance/ManualExpenseForm';
+import DailyWorkerTablet from './features/attendance/DailyWorkerTablet';
 import { prepareReceiptFiles } from './features/finance/receiptQuality';
-import { expenseWorkspaceStateKey, normalizeExpenseWorkspaceState, readExpenseUiState, writeExpenseUiState } from './features/finance/expenseWorkspaceState';
-import { createReceiptSubmission, processReceiptDocument } from './lib/supabase';
+import { createReceiptSubmission, loadShortTermAttendance, loadShortTermWorkerDetail, processReceiptDocument } from './lib/supabase';
 import { acceptEmployeeInvitation, activateTabletDevice, archiveCostCenter, bootstrapTossPlaceConnection, createCorporateCard, createFeedbackItem, createLeaveRequest, createManagementAccount, createManualStaff, createMeetingNote, deleteFinanceDocument, deleteStaffCategory, deleteWorkSchedule, disconnectCorporateCard, ensureManagerOrganization, getAuthContext, getCachedOrganizationSalesDashboard, getManagerTabletOrganization, getOrganizationSettings, getStaticAttendanceQr, getTabletDeviceContext, getTossPlaceConnection, grantStaffLeave, importCardTransactions, importFeedbackItems, inviteEmployeeByCode, isAuthSessionError, loadCardTransactions, loadCorporateCards, loadCostCenters, loadDriveReceiptUploads, loadFeedbackItems, loadFinanceDocuments, loadManagementAccounts, loadMeetingNotes, loadOperationalAlerts, loadOrganizationSalesDashboard, loadPayrollWorkspace, loadStaffCategories, loadStaffSensitiveProfile, loadTabletDevices, loadWorkforce, manageManagementAccount, markOperationalAlertRead, openFinanceDocument, previewTabletLeaveRequest, recordQrAttendance, reviewLeaveRequest, reviewWorkSchedule, revokeTabletDevice, runMonthEndOperations, saveCostCenter, saveCustomTossPlaceCredentials, saveOrganizationSettings, savePayrollContract, savePayrollDraft, saveStaffCategory, saveStaffOrder, saveStaffSensitiveProfile, saveTossPlaceConnection, saveWorkSchedule, saveWorkSchedulesBulk, sendSettlementEmail, signIn, signOut, signUp, supabase, syncOrganizationSales, tabletAttendance, tabletLeaveRequest, updateCorporateCard, updateFeedbackItem, updateStaffPhone, updateStaffProfile, uploadFinanceDocument, uploadReceiptToGoogleDrive, uploadStaffAvatar } from './lib/supabase';
-import { loadShortTermAttendance, loadShortTermWorkerDetail } from './lib/supabase';
 
 const KOREAN_WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 const currentKoreanDateKey = () => {
@@ -157,34 +159,6 @@ const formatMoneyField = field => {
 const formatPhone = value => { if (!value) return '미등록'; const digits = String(value).replace(/\D/g, '').replace(/^82/, '0'); return digits.length === 11 ? `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}` : digits.length === 10 ? `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}` : value; };
 const formatHours = minutes => { const value = Math.max(0, Math.round(minutes || 0)); return value < 60 ? `${value}분` : `${Math.floor(value / 60)}시간${value % 60 ? ` ${value % 60}분` : ''}`; };
 const formatAttendanceTime = value => value ? new Intl.DateTimeFormat('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Seoul' }).format(new Date(value)) : '-';
-const attendanceMinutes = record => {
-  if (!record?.checked_in_at || !record?.checked_out_at) return 0;
-  return Math.max(0, (new Date(record.checked_out_at).getTime() - new Date(record.checked_in_at).getTime()) / 60000);
-};
-const clockMinutes = value => { const [hour, minute] = String(value || '0:0').split(':').map(Number); return hour * 60 + minute; };
-const attendanceMinuteOnWorkDate = (timestamp, workDate) => {
-  if (!timestamp || !workDate) return 0;
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date(timestamp)).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
-  const actualDate = `${parts.year}-${parts.month}-${parts.day}`;
-  const dayOffset = Math.round((Date.parse(`${actualDate}T00:00:00Z`) - Date.parse(`${workDate}T00:00:00Z`)) / 86400000);
-  return dayOffset * 1440 + Number(parts.hour) * 60 + Number(parts.minute);
-};
-const payableAttendanceMinutes = (record, schedules = [], policy = DEFAULT_LEAVE_POLICY) => {
-  if (!record?.checked_in_at || !record?.checked_out_at) return { grossMinutes: 0, breakMinutes: 0, payableMinutes: 0, schedule: null };
-  const schedule = schedules.find(item => item.staff_id === record.staff_id && item.work_date === record.work_date && !item.is_day_off && item.starts_at && item.ends_at) || null;
-  let grossMinutes = attendanceMinutes(record);
-  if (schedule) {
-    const scheduledStart = clockMinutes(schedule.starts_at); let scheduledEnd = clockMinutes(schedule.ends_at);
-    if (scheduledEnd <= scheduledStart) scheduledEnd += 1440;
-    const actualStart = attendanceMinuteOnWorkDate(record.checked_in_at, record.work_date);
-    const actualEnd = attendanceMinuteOnWorkDate(record.checked_out_at, record.work_date);
-    grossMinutes = Math.max(0, Math.min(actualEnd, scheduledEnd) - Math.max(actualStart, scheduledStart));
-  }
-  const breakMinutes = schedule?.break_paid === true ? 0 : payrollBreakMinutes({ schedule, policy, grossMinutes });
-  const netMinutes = Math.max(0, grossMinutes - breakMinutes);
-  const payableMinutes = roundPayableMinutes(netMinutes, policy);
-  return { grossMinutes, breakMinutes, payableMinutes, schedule };
-};
 const monthlyAttendance = employee => (employee.attendanceHistory || []).filter(record => String(record.work_date || '').startsWith(todayKey.slice(0, 7)));
 const completedWorkDays = employee => monthlyAttendance(employee).filter(record => record.checked_in_at && record.checked_out_at).length;
 const estimatedPayrollFor = employee => employee.pay === '월급제'
@@ -233,7 +207,7 @@ function TabletDeviceApp() {
   if (screen === 'loading') return <main className="tablet-page"><section className="tablet-shell"><section className="tablet-card"><LoadingBar label="태블릿 연결 정보를 확인하는 중…"/></section></section></main>;
   if (screen === 'setup') return <main className="tablet-page"><section className="tablet-shell"><aside className="tablet-identity"><div className="auth-brand"><span>✓</span><b>timefit</b></div><div><p>매장 운영 태블릿</p><h2>사업장에<br/>태블릿 연결</h2><span>관리자가 로그인해 이 기기를 사업장 전용 출퇴근 기기로 활성화합니다.</span></div></aside><section className="tablet-card"><div className="tablet-card-head"><div><p>TIMEFIT TABLET</p><h1>태블릿 연결</h1></div></div><div className="tablet-intro"><b>관리자 로그인으로 연결하세요</b><span>연결 후 관리자 계정은 이 태블릿에 유지되지 않습니다.</span></div><form className="tablet-form" onSubmit={activate}><label className="tablet-field"><span>기기 이름</span><input name="deviceName" defaultValue="매장 태블릿" required/><small>예: 성수점 카운터 태블릿</small></label><label className="tablet-field"><span>관리자 이메일</span><input name="email" type="email" required autoComplete="email"/></label><label className="tablet-field"><span>관리자 비밀번호</span><input name="password" type="password" required autoComplete="current-password"/></label><button className="submit tablet-submit" disabled={busy}>{busy ? '연결 중…' : '이 사업장 태블릿으로 연결'}</button></form></section></section>{message && <NoticeModal message={message} tone={tone} onClose={() => setMessage('')}/>}</main>;
   const updateLeaveDate = event => { setLeaveDate(event.currentTarget.value); setLeavePreview(null); };
-  return <main className="tablet-page"><section className="tablet-shell"><aside className="tablet-identity"><div className="auth-brand"><span>✓</span><b>timefit</b></div><div><p>{context?.organizationName || '사업장'} · {context?.deviceName}</p><h2>{tab === 'attendance' ? '빠르고 정확한\n직원 출퇴근' : '간편한\n휴가 신청'}</h2><span>관리자 연결이 완료된 사업장 전용 태블릿입니다.</span></div></aside><section className="tablet-card"><div className="tablet-card-head"><div><p>TIMEFIT TABLET</p><h1>{tab === 'attendance' ? '출퇴근 기록' : '휴가 신청'}</h1></div><div className="tablet-status"><i/><span>연결됨</span></div></div><div className="tablet-tabs"><button className={tab === 'attendance' ? 'active' : ''} onClick={() => { setTab('attendance'); setCandidate(null); setLeavePreview(null); }}><b>◷</b> 출퇴근</button><button className={tab === 'leave' ? 'active' : ''} onClick={() => { setTab('leave'); setCandidate(null); }}><b>◫</b> 휴가 신청</button></div>{tab === 'attendance' ? <><div className="tablet-intro"><b>전화번호 뒷 4자리로 확인하세요</b><span>확인 후 출근 또는 퇴근 버튼이 표시됩니다.</span></div><form className="tablet-form" onSubmit={lookup}><label className="tablet-field"><span>전화번호 뒷 4자리</span><input inputMode="numeric" pattern="[0-9]*" maxLength="4" value={last4} onChange={event => setLast4(event.target.value.replace(/\D/g, '').slice(0, 4))} required autoFocus/><small>직원 본인의 전화번호 끝 4자리</small></label><button className="submit tablet-submit" disabled={busy || last4.length !== 4}>{busy ? '확인 중…' : '직원 확인'}</button></form>{candidate && <div className="tablet-confirm"><span className="confirm-mark">✓</span><b>{candidate.employeeName}님이 맞나요?</b><p>확인 후 {candidate.nextAction === 'check_in' ? '출근' : '퇴근'} 기록이 저장됩니다.</p><div><button type="button" className="outline" onClick={() => setCandidate(null)}>다시 입력</button><button type="button" className="cta" disabled={busy} onClick={record}>{candidate.nextAction === 'check_in' ? '출근하기' : '퇴근하기'}</button></div></div>}</> : <form className="tablet-form" onSubmit={leave}><label className="tablet-field"><span>전화번호 뒷 8자리</span><input inputMode="numeric" pattern="[0-9]*" maxLength="8" value={last8} onChange={event => { setLast8(event.target.value.replace(/\D/g, '').slice(0, 8)); setLeavePreview(null); }} required/><small>직원 본인의 전화번호 끝 8자리</small></label><label className="tablet-field"><span>휴가 날짜</span><input name="date" type="date" min={todayKey} value={leaveDate} onInput={updateLeaveDate} onChange={updateLeaveDate} required/><small>오늘 이후 날짜만 신청할 수 있어요.</small></label><fieldset className="leave-type-picker"><legend>휴가 종류</legend><div>{['연차','오전 반차','오후 반차'].map(type => <button type="button" key={type} className={leaveType === type ? 'selected' : ''} onClick={() => { setLeaveType(type); setLeavePreview(null); }}><b>{type === '연차' ? '1일' : '.5일'}</b><span>{type}</span></button>)}</div></fieldset><button className="submit tablet-submit" disabled={busy || last8.length !== 8 || !leaveDate}>{busy ? '확인 중…' : '휴가 신청 내용 확인'}</button></form>}{leavePreview && <div className="tablet-confirm tablet-leave-confirm"><span className="confirm-mark">✓</span><b>{leavePreview.employeeName}님의 휴가 신청 내용을 확인해 주세요</b><p>{formatKoreanDate(leaveDate)} · {leaveType} · 차감 {leavePreview.amount}일</p><div><button type="button" className="outline" onClick={() => setLeavePreview(null)}>수정</button><button type="button" className="cta" disabled={busy} onClick={submitLeave}>{busy ? '신청 중…' : '신청 완료'}</button></div></div>}<button type="button" className="auth-switch" onClick={clearDevice}>태블릿 연결 해제</button></section></section>{message && <NoticeModal message={message} tone={tone} onClose={() => setMessage('')}/>}</main>;
+  return <main className="tablet-page"><section className="tablet-shell"><aside className="tablet-identity"><div className="auth-brand"><span>✓</span><b>timefit</b></div><div><p>{context?.organizationName || '사업장'} · {context?.deviceName}</p><h2>{tab === 'attendance' ? '빠르고 정확한\n직원 출퇴근' : tab === 'daily' ? '간편하고 안전한\n단기직원 출퇴근' : '간편한\n휴가 신청'}</h2><span>관리자 연결이 완료된 사업장 전용 태블릿입니다.</span></div></aside><section className="tablet-card"><div className="tablet-card-head"><div><p>TIMEFIT TABLET</p><h1>{tab === 'attendance' ? '출퇴근 기록' : tab === 'daily' ? '단기직원 출퇴근' : '휴가 신청'}</h1></div><div className="tablet-status"><i/><span>연결됨</span></div></div><div className="tablet-tabs"><button className={tab === 'attendance' ? 'active' : ''} onClick={() => { setTab('attendance'); setCandidate(null); setLeavePreview(null); }}><b>◷</b> 출퇴근</button><button className={tab === 'leave' ? 'active' : ''} onClick={() => { setTab('leave'); setCandidate(null); }}><b>◫</b> 휴가 신청</button><button className={tab === 'daily' ? 'active' : ''} onClick={() => { setTab('daily'); setCandidate(null); setLeavePreview(null); }}><b>♙</b> 단기직원</button></div>{tab === 'attendance' ? <><div className="tablet-intro"><b>전화번호 뒷 4자리로 확인하세요</b><span>확인 후 출근 또는 퇴근 버튼이 표시됩니다.</span></div><form className="tablet-form" onSubmit={lookup}><label className="tablet-field"><span>전화번호 뒷 4자리</span><input inputMode="numeric" pattern="[0-9]*" maxLength="4" value={last4} onChange={event => setLast4(event.target.value.replace(/\D/g, '').slice(0, 4))} required autoFocus/><small>직원 본인의 전화번호 끝 4자리</small></label><button className="submit tablet-submit" disabled={busy || last4.length !== 4}>{busy ? '확인 중…' : '직원 확인'}</button></form>{candidate && <div className="tablet-confirm"><span className="confirm-mark">✓</span><b>{candidate.employeeName}님이 맞나요?</b><p>확인 후 {candidate.nextAction === 'check_in' ? '출근' : '퇴근'} 기록이 저장됩니다.</p><div><button type="button" className="outline" onClick={() => setCandidate(null)}>다시 입력</button><button type="button" className="cta" disabled={busy} onClick={record}>{candidate.nextAction === 'check_in' ? '출근하기' : '퇴근하기'}</button></div></div>}</> : tab === 'daily' ? <DailyWorkerTablet deviceToken={deviceToken} onMessage={show}/> : <form className="tablet-form" onSubmit={leave}><label className="tablet-field"><span>전화번호 뒷 8자리</span><input inputMode="numeric" pattern="[0-9]*" maxLength="8" value={last8} onChange={event => { setLast8(event.target.value.replace(/\D/g, '').slice(0, 8)); setLeavePreview(null); }} required/><small>직원 본인의 전화번호 끝 8자리</small></label><label className="tablet-field"><span>휴가 날짜</span><input name="date" type="date" min={todayKey} value={leaveDate} onInput={updateLeaveDate} onChange={updateLeaveDate} required/><small>오늘 이후 날짜만 신청할 수 있어요.</small></label><fieldset className="leave-type-picker"><legend>휴가 종류</legend><div>{['연차','오전 반차','오후 반차'].map(type => <button type="button" key={type} className={leaveType === type ? 'selected' : ''} onClick={() => { setLeaveType(type); setLeavePreview(null); }}><b>{type === '연차' ? '1일' : '.5일'}</b><span>{type}</span></button>)}</div></fieldset><button className="submit tablet-submit" disabled={busy || last8.length !== 8 || !leaveDate}>{busy ? '확인 중…' : '휴가 신청 내용 확인'}</button></form>}{tab === 'leave' && leavePreview && <div className="tablet-confirm tablet-leave-confirm"><span className="confirm-mark">✓</span><b>{leavePreview.employeeName}님의 휴가 신청 내용을 확인해 주세요</b><p>{formatKoreanDate(leaveDate)} · {leaveType} · 차감 {leavePreview.amount}일</p><div><button type="button" className="outline" onClick={() => setLeavePreview(null)}>수정</button><button type="button" className="cta" disabled={busy} onClick={submitLeave}>{busy ? '신청 중…' : '신청 완료'}</button></div></div>}<button type="button" className="auth-switch" onClick={clearDevice}>태블릿 연결 해제</button></section></section>{message && <NoticeModal message={message} tone={tone} onClose={() => setMessage('')}/>}</main>;
 }
 
 function TabletApp() {
@@ -268,6 +242,7 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
   const [credentials, setCredentials] = useState(null);
   const [chapter, setChapter] = useState("accounts");
   const [editing, setEditing] = useState(null);
+  const [viewingPermissions, setViewingPermissions] = useState(null);
   const [createMode, setCreateMode] = useState("link_existing");
   const [createPermissions, setCreatePermissions] = useState([
     "dashboard.view",
@@ -359,6 +334,7 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
     ["leave.view", "휴가 조회", "연차 현황"],
     ["leave.review", "휴가 승인", "휴가 요청 승인·반려"],
     ["payroll.view", "급여·인건비 조회", "민감 정보"],
+    ["payroll.manage", "급여 관리", "사업장 전체 급여 초안·계약 저장"],
     ["employee.view", "직원 기본정보 조회", "프로필 열람"],
     ["employee.manage", "직원 등록·관리", "담당 구분 내 직접 등록"],
     ["employee.compensation.view", "직원 보상정보 조회", "급여 형태·단가 열람"],
@@ -367,7 +343,7 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
     ["sales.sync", "매출 동기화", "POS 내역 수집 실행"],
     ["finance.view", "지출·증빙 조회", "지출 원장·결산 열람"],
     ["expense.manage", "지출·증빙 관리", "지출 원장 수정"],
-    ["expense.receipt.review", "영수증 검수", "OCR 확인·수정 요청·승인"],
+    ["expense.receipt.review", "영수증 검수", "AX 확인·수정 요청·승인"],
     ["expense.card.manage", "법인카드 관리", "카드 연결·동기화"],
     ["expense.closeout.manage", "결산 관리", "기간 마감·재오픈"],
     ["expense.export", "지출 내보내기", "CSV·증빙 자료 다운로드"],
@@ -382,6 +358,7 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
     "schedule.manage": ["schedule.view"],
     "schedule.approve": ["schedule.view"],
     "leave.review": ["leave.view"],
+    "payroll.manage": ["payroll.view"],
     "employee.manage": ["employee.view"],
     "employee.compensation.view": ["employee.view"],
     "employee.compensation.manage": [
@@ -396,6 +373,7 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
     "expense.export": ["finance.view"],
   };
   const permissionPresets = {
+    full_access: permissionOptions.map(([value]) => value),
     store_manager: [
       "dashboard.view",
       "attendance.view",
@@ -419,6 +397,7 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
     ],
     accountant: [
       "payroll.view",
+      "payroll.manage",
       "sales.view",
       "finance.view",
       "expense.manage",
@@ -677,6 +656,7 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
                   aria-label="권한 프리셋"
                 >
                   {[
+                    ["full_access", "모든 권한"],
                     ["store_manager", "매장 매니저"],
                     ["part_lead", "파트 책임자"],
                     ["accountant", "회계 담당자"],
@@ -830,11 +810,7 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
                           ? "기존 직원 계정"
                           : "독립 관리자 계정"}
                       </span>
-                      <div>
-                        {granted.map((label) => (
-                          <small key={label}>{label}</small>
-                        ))}
-                      </div>
+                      <small className="management-permission-count">허용 기능 {granted.length}개</small>
                     </div>
                     <div className="management-account-actions">
                       <Chip
@@ -842,6 +818,13 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
                       >
                         {account.status === "active" ? "활성" : "중지"}
                       </Chip>
+                      <button
+                        type="button"
+                        className="outline management-permission-open"
+                        onClick={() => setViewingPermissions({ account, granted, linked })}
+                      >
+                        권한 보기
+                      </button>
                       <button
                         type="button"
                         className="outline"
@@ -868,6 +851,42 @@ function ManagementAccountSettings({ organizationId, employees, isOwner }) {
             )}
           </div>
         </section>
+      )}
+      {viewingPermissions && (
+        <Modal
+          title="관리자 권한 보기"
+          onClose={() => setViewingPermissions(null)}
+          variant="management-permission-modal"
+        >
+          <div className="management-permission-summary">
+            <div className="management-account-avatar">
+              {viewingPermissions.account.login_id.slice(0, 2).toUpperCase()}
+            </div>
+            <div>
+              <code>{viewingPermissions.account.login_id}</code>
+              <span>
+                {viewingPermissions.account.role_code === "executive_chef" ? "총괄셰프" : "매니저"}
+                {viewingPermissions.linked ? ` · ${viewingPermissions.linked.name} 연결` : " · 직원 연결 없음"}
+              </span>
+            </div>
+            <Chip type={viewingPermissions.account.status === "active" ? "green" : "gray"}>
+              {viewingPermissions.account.status === "active" ? "활성" : "중지"}
+            </Chip>
+          </div>
+          <section className="management-permission-detail">
+            <div>
+              <h4>허용 기능</h4>
+              <span>{viewingPermissions.granted.length}개</span>
+            </div>
+            {viewingPermissions.granted.length ? (
+              <ul>{viewingPermissions.granted.map((label) => <li key={label}>✓ {label}</li>)}</ul>
+            ) : <p>허용된 기능이 없습니다.</p>}
+          </section>
+          <div className="management-permission-modal-actions">
+            <button type="button" className="outline" onClick={() => setViewingPermissions(null)}>닫기</button>
+            <button type="button" className="submit" onClick={() => { const account = viewingPermissions.account; setViewingPermissions(null); openEditor(account); }}>권한 수정</button>
+          </div>
+        </Modal>
       )}
       {editing && (
         <Modal
@@ -3271,28 +3290,35 @@ function Attendance({ employees, checkedIn, setCheckedIn, onSelect, onRefresh, c
 function ShortTermWorkerDetail({ organizationId, record, onClose }) {
   const [detail, setDetail] = useState(null);
   const [error, setError] = useState('');
-  useEffect(() => {
+  const loadDetail = () => {
     let active = true;
+    setError('');
     loadShortTermWorkerDetail(organizationId, record.id)
       .then(value => { if (active) setDetail(value); })
       .catch(reason => { if (active) setError(reason.message || '상세정보를 불러오지 못했습니다.'); });
     return () => { active = false; };
+  };
+  useEffect(() => {
+    setDetail(null);
+    return loadDetail();
   }, [organizationId, record.id]);
   const value = detail || record;
   return <Modal title="단기직원 상세" onClose={onClose} variant="short-term-worker-modal">
-    {error ? <div className="empty-schedule"><b>{error}</b></div> : !detail ? <LoadingBar label="신원정보를 안전하게 불러오는 중…"/> : <>
+    <>
       <div className="short-term-worker-profile"><Avatar name={value.display_name} color="blue" team="단기직원"/><div><b>{value.display_name}</b><span>단기직원</span></div></div>
       <dl className="short-term-worker-detail-list">
         <div><dt>이름</dt><dd>{value.display_name}</dd></div>
-        <div><dt>주민등록번호</dt><dd>{value.resident_registration_number}</dd></div>
-        <div><dt>전화번호</dt><dd>{value.phone_number}</dd></div>
+        <div><dt>주민등록번호</dt><dd>{value.resident_registration_number || (detail ? '-' : '불러오는 중…')}</dd></div>
+        <div><dt>전화번호</dt><dd>{value.phone_number || '-'}</dd></div>
         <div><dt>근무 날짜</dt><dd>{value.work_date}</dd></div>
         <div><dt>출근 시간</dt><dd>{formatAttendanceTime(value.checked_in_at)}</dd></div>
         <div><dt>퇴근 시간</dt><dd>{formatAttendanceTime(value.checked_out_at)}</dd></div>
         <div><dt>근무 시간</dt><dd>{value.checked_out_at ? formatHours(attendanceMinutes(value)) : '근무 중'}</dd></div>
       </dl>
+      {!detail && !error && <LoadingBar label="신원정보를 안전하게 불러오는 중…"/>}
+      {error && <div className="empty-schedule short-term-worker-detail-error"><b>{error}</b><button type="button" className="outline" onClick={loadDetail}>다시 시도</button></div>}
       <p className="short-term-worker-sensitive-note">관리자 권한으로 조회한 개인정보입니다.</p>
-    </>}
+    </>
   </Modal>;
 }
 
@@ -3323,7 +3349,13 @@ function ShortTermWorkers({ organizationId }) {
   const review = records.filter(record => record.needs_review).length;
   const statusFor = record => record.needs_review ? '확인 필요' : record.checked_out_at ? '퇴근 완료' : '근무 중';
   return <>
-    <div className="page-title attendance-page-title"><div><p>{formatKoreanDate(selectedDate)} 기준</p><h1>단기직원 관리</h1><span>단기직원의 신원정보와 출퇴근 기록을 확인합니다.</span></div></div>
+    <div className="page-title attendance-page-title">
+      <div>
+        <p>{formatKoreanDate(selectedDate)} 기준</p>
+        <h1>단기직원 관리</h1>
+        <span>일반 직원과 분리된 단기직원 출퇴근 기록입니다. 직원 등록 없이 태블릿 출근 시 저장됩니다.</span>
+      </div>
+    </div>
     <section className="attendance-kpis" aria-label="선택 날짜 단기직원 요약">
       <article><span>출근 기록</span><strong>{records.length}<small>명</small></strong></article>
       <article><span>퇴근 완료</span><strong>{completed}<small>명</small></strong></article>
@@ -3331,13 +3363,27 @@ function ShortTermWorkers({ organizationId }) {
       <article className={review ? 'missing' : ''}><span>확인 필요</span><strong>{review}<small>명</small></strong></article>
     </section>
     <section className="card full-card attendance-management-card">
-      <div className="attendance-date-tools"><button type="button" aria-label="이전 날짜" onClick={() => moveDate(-1)}>‹</button><label><span>조회 날짜</span><input type="date" value={selectedDate} onChange={event => setSelectedDate(event.target.value || currentDateKey)}/></label><button type="button" aria-label="다음 날짜" onClick={() => moveDate(1)}>›</button><button type="button" className="attendance-today" disabled={selectedDate === currentDateKey} onClick={() => setSelectedDate(currentDateKey)}>오늘</button></div>
+      <div className="attendance-date-tools">
+        <button type="button" aria-label="이전 날짜" onClick={() => moveDate(-1)}>‹</button>
+        <label><span>조회 날짜</span><input type="date" value={selectedDate} onChange={event => setSelectedDate(event.target.value || currentDateKey)}/></label>
+        <button type="button" aria-label="다음 날짜" onClick={() => moveDate(1)}>›</button>
+        <button type="button" className="attendance-today" disabled={selectedDate === currentDateKey} onClick={() => setSelectedDate(currentDateKey)}>오늘</button>
+      </div>
       {loading ? <LoadingBar label="단기직원 근무기록을 불러오는 중…"/> : error ? <div className="empty-schedule"><b>{error}</b><button type="button" className="outline" onClick={load}>다시 시도</button></div> : <div className="attendance-table-wrap">
-        <table className="attendance-status-table short-term-worker-table"><thead><tr><th>단기직원</th><th>전화번호</th><th>근무일</th><th>출근</th><th>퇴근</th><th>근무시간</th><th>상태</th><th><span className="sr-only">관리</span></th></tr></thead>
-          <tbody>{records.map(record => { const status = statusFor(record); return <tr key={record.id} onClick={() => setSelectedRecord(record)}>
-            <td><span className="attendance-person"><Avatar name={record.display_name} color="blue" team="단기직원"/><b>{record.display_name}<small>단기직원</small></b></span></td>
-            <td>{record.phone_number}</td><td>{record.work_date}</td><td className="attendance-time-value">{formatAttendanceTime(record.checked_in_at)}</td><td className="attendance-time-value">{formatAttendanceTime(record.checked_out_at)}</td><td>{record.checked_out_at ? formatHours(attendanceMinutes(record)) : '-'}</td><td><Chip type={status === '확인 필요' ? 'orange' : 'green'}>{status}</Chip></td><td><button type="button" className="outline" onClick={event => { event.stopPropagation(); setSelectedRecord(record); }}>상세</button></td>
-          </tr>; })}</tbody>
+        <table className="attendance-status-table short-term-worker-table">
+          <thead><tr><th>단기직원</th><th>연락처</th><th>근무일</th><th>출근</th><th>퇴근</th><th>근무시간</th><th>상태</th><th><span className="sr-only">관리</span></th></tr></thead>
+          <tbody>{records.map(record => {
+            const status = statusFor(record);
+            return <tr key={record.id} onClick={() => setSelectedRecord(record)}>
+              <td><span className="attendance-person"><Avatar name={record.display_name} color="blue" team="단기직원"/><b>{record.display_name}<small>단기직원</small></b></span></td>
+              <td>{record.phone_number}</td>
+              <td>{record.work_date}</td>
+              <td className="attendance-time-value">{formatAttendanceTime(record.checked_in_at)}</td>
+              <td className="attendance-time-value">{formatAttendanceTime(record.checked_out_at)}</td>
+              <td>{record.checked_out_at ? formatHours(attendanceMinutes(record)) : '-'}</td>
+              <td><Chip type={status === '확인 필요' ? 'orange' : 'green'}>{status}</Chip></td><td><button type="button" className="outline" onClick={event => { event.stopPropagation(); setSelectedRecord(record); }}>상세</button></td>
+            </tr>;
+          })}</tbody>
         </table>
         {!records.length && <div className="attendance-empty">선택한 날짜의 단기직원 근무기록이 없습니다.</div>}
       </div>}
@@ -4894,6 +4940,7 @@ function Payroll({
   leaveRequests = [],
   onSelect,
   canManage = false,
+  authorizeWrite,
   initialMonth,
   onOpenAttendance,
   organizationId,
@@ -5053,7 +5100,23 @@ function Payroll({
       })),
     [rows, source, month],
   );
-  const total = rows.reduce((sum, row) => sum + row.estimatedTotal, 0);
+  const payrollVisibleRows = useMemo(
+    () => comparisonRows.filter(hasPayrollWorkday),
+    [comparisonRows],
+  );
+  const payrollGroups = useMemo(
+    () => groupStaffByPayType(payrollVisibleRows, (row) => row.payType),
+    [payrollVisibleRows],
+  );
+  const orderedRows = useMemo(
+    () => payrollGroups.flatMap((group) => group.staff),
+    [payrollGroups],
+  );
+  const orderedComparisonRows = useMemo(() => {
+    const byStaffId = new Map(comparisonRows.map((row) => [row.staffId, row]));
+    return orderedRows.map((row) => byStaffId.get(row.staffId)).filter(Boolean);
+  }, [comparisonRows, orderedRows]);
+  const total = payrollVisibleRows.reduce((sum, row) => sum + row.estimatedTotal, 0);
   const missingCheckoutIssues = useMemo(() => {
     const range = payrollAttendanceRange(month, currentKoreanDateKey());
     return range.from > range.to
@@ -5064,7 +5127,7 @@ function Payroll({
           leaves: leaveRequests,
         }).filter((issue) => issue.types.includes("checkout"));
   }, [employees, leaveRequests, month]);
-  const missingContracts = rows.filter((row) => !row.hasContract);
+  const missingContracts = payrollVisibleRows.filter((row) => !row.hasContract);
   const liveTotal = rows.reduce((sum, row) => sum + row.basePay, 0);
   const draftUpdatedAt = workspace.draft?.updated_at
     ? new Date(workspace.draft.updated_at)
@@ -5151,7 +5214,7 @@ function Payroll({
   const printPayroll = (employeeId) => {
     if (
       !openPayrollPrintView({
-        rows: comparisonRows,
+        rows: orderedComparisonRows,
         details: payrollDetails,
         month,
         employeeId,
@@ -5164,13 +5227,14 @@ function Payroll({
   };
   const saveDraft = async () => {
     if (!canManage)
-      return setMessage("급여 초안 저장은 최고관리자만 할 수 있습니다.");
+      return setMessage("급여 관리 권한이 필요합니다.");
     setBusy(true);
     try {
+      await authorizeWrite?.();
       await savePayrollDraft({
         organizationId,
         settlementMonth: month,
-        lines: rows.map((row) => ({
+        lines: payrollVisibleRows.map((row) => ({
           staff_id: row.staffId,
           pay_type: row.payType,
           applied_rate: row.rate,
@@ -5181,7 +5245,7 @@ function Payroll({
           estimated_total: row.basePay,
           calculation_note:
             row.payType === "hourly"
-              ? `스케줄 범위·휴게 ${row.breakMinutes}분 제외·반올림 정책 적용`
+              ? `${source?.settings?.payroll_include_after_scheduled_end ? "스케줄 시작 이후 실제 퇴근까지" : "스케줄 범위"}·휴게 ${row.breakMinutes}분 제외·반올림 정책 적용`
               : row.payType === "daily"
                 ? "퇴근 완료 일수 기준"
                 : row.payType === "annual"
@@ -5200,12 +5264,13 @@ function Payroll({
   const saveContract = async (event) => {
     event.preventDefault();
     if (!canManage)
-      return setMessage("급여 계약 변경은 최고관리자만 할 수 있습니다.");
+      return setMessage("급여 관리 권한이 필요합니다.");
     const form = new FormData(event.currentTarget);
     const payType = form.get("payType");
     const rate = parseMoney(form.get("rate"));
     setBusy(true);
     try {
+      await authorizeWrite?.();
       await savePayrollContract({
         organization_id: organizationId,
         staff_id: form.get("staffId"),
@@ -5226,29 +5291,16 @@ function Payroll({
       setBusy(false);
     }
   };
-  const downloadCsv = () => {
-    const csv = [
-      "직원,급여 형태,적용 단가,실근무시간,완료 근무일,승인 휴가,급여 초안",
-      ...rows.map((row) =>
-        [
-          row.name,
-          row.payType,
-          Math.round(row.rate),
-          formatHours(row.workedMinutes),
-          row.completedDays,
-          row.leaveDays,
-          Math.round(row.estimatedTotal),
-        ].join(","),
-      ),
-    ].join("\n");
-    const href = URL.createObjectURL(
-      new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8;" }),
-    );
-    const link = document.createElement("a");
-    link.href = href;
-    link.download = `timefit-payroll-draft-${month}.csv`;
-    link.click();
-    URL.revokeObjectURL(href);
+  const downloadExcel = async () => {
+    setBusy(true);
+    try {
+      await downloadPayrollWorkbook({ rows: orderedComparisonRows, month, savedDraft: Boolean(workspace.draft) });
+      setMessage("급여 형태별 엑셀 파일을 만들었어요.");
+    } catch (error) {
+      setMessage(error.message || "엑셀 파일을 만들지 못했습니다.");
+    } finally {
+      setBusy(false);
+    }
   };
   return (
     <>
@@ -5259,6 +5311,41 @@ function Payroll({
           <span>급여 초안은 검토용이며 세금·공제 확정 전 금액입니다.</span>
         </div>
       </div>
+      <section className="pay-cards payroll-summary-top" aria-label="급여 총액 요약">
+        <div className="card payroll-total-card">
+          <p>{workspace.draft ? "저장된 초안 총 급여" : "예상 총 급여"}</p>
+          <strong>{formatMoney(total)}</strong>
+          <span>{workspace.draft ? "저장된 세전 스냅샷" : "세전 예상액"}</span>
+        </div>
+        <div className="card">
+          <p>급여 산정 대상</p>
+          <strong>
+            {payrollVisibleRows.length}
+            <small>명</small>
+          </strong>
+          <span>실제 근태와 계약 기준</span>
+        </div>
+        <div className="card">
+          <p>퇴근 기록 누락</p>
+          <strong>
+            {missingCheckoutIssues.length}
+            <small>건</small>
+          </strong>
+          <span>
+            {missingCheckoutIssues.length
+              ? "이 달의 실제 근태 확인 목록 기준"
+              : "확인할 퇴근 누락 기록이 없어요."}
+          </span>
+          {onOpenAttendance && missingCheckoutIssues.length > 0 && (
+            <button
+              className="outline payroll-issue-link"
+              onClick={() => onOpenAttendance(month)}
+            >
+              기록 확인하기
+            </button>
+          )}
+        </div>
+      </section>
       <section className="card full-card">
         <div className="card-title">
           <div>
@@ -5312,7 +5399,7 @@ function Payroll({
           {canManage && (
             <button
               className="submit"
-              disabled={busy || loading || !rows.length}
+              disabled={busy || loading || !payrollVisibleRows.length}
               onClick={saveDraft}
             >
               {busy
@@ -5324,17 +5411,17 @@ function Payroll({
           )}
           <button
             className="outline"
-            disabled={loading || !rows.length}
+            disabled={loading || !payrollVisibleRows.length}
             onClick={() => printPayroll(null)}
           >
             전체 급여 PDF
           </button>
           <button
             className="outline"
-            disabled={!rows.length}
-            onClick={downloadCsv}
+            disabled={busy || !payrollVisibleRows.length}
+            onClick={downloadExcel}
           >
-            CSV 다운로드
+            {busy ? "엑셀 생성 중…" : "엑셀 다운로드 (.xlsx)"}
           </button>
         </div>
       </section>
@@ -5408,41 +5495,6 @@ function Payroll({
           </form>
         </section>
       )}
-      <section className="pay-cards">
-        <div className="card">
-          <p>{workspace.draft ? "저장된 초안 인건비" : "예상 총 인건비"}</p>
-          <strong>{formatMoney(total)}</strong>
-          <span>{workspace.draft ? "저장된 세전 스냅샷" : "세전 예상액"}</span>
-        </div>
-        <div className="card">
-          <p>급여 산정 대상</p>
-          <strong>
-            {rows.length}
-            <small>명</small>
-          </strong>
-          <span>실제 근태와 계약 기준</span>
-        </div>
-        <div className="card">
-          <p>퇴근 기록 누락</p>
-          <strong>
-            {missingCheckoutIssues.length}
-            <small>건</small>
-          </strong>
-          <span>
-            {missingCheckoutIssues.length
-              ? "이 달의 실제 근태 확인 목록 기준"
-              : "확인할 퇴근 누락 기록이 없어요."}
-          </span>
-          {onOpenAttendance && missingCheckoutIssues.length > 0 && (
-            <button
-              className="outline payroll-issue-link"
-              onClick={() => onOpenAttendance(month)}
-            >
-              기록 확인하기
-            </button>
-          )}
-        </div>
-      </section>
       {missingContracts.length > 0 && (
         <div className="payroll-contract-warning" role="status">
           <span>
@@ -5475,7 +5527,7 @@ function Payroll({
       <section className="card full-card">
         <div className="card-title">
           <div>
-            <h2>직원별 급여 초안</h2>
+            <h2>급여 형태별 직원 급여 초안</h2>
             <p>
               시급은 운영 설정의 반올림 단위가 적용된 실제 퇴근 완료 시간을
               사용합니다.
@@ -5484,8 +5536,16 @@ function Payroll({
         </div>
         {loading ? (
           <LoadingBar label="급여 계약과 근태를 불러오는 중…" />
-        ) : rows.length ? (
-          rows.map((row) => (
+        ) : payrollGroups.length ? (
+          payrollGroups.map((group) => (
+            <section className="staff-type-group payroll-pay-type-group" key={group.type}>
+              <div className="staff-type-heading">
+                <b>{group.type}</b>
+                <span>
+                  {group.staff.length}명 · {formatMoney(group.staff.reduce((sum, row) => sum + row.estimatedTotal, 0))}
+                </span>
+              </div>
+              {group.staff.map((row) => (
             <div
               className="salary-row clickable-row"
               key={row.staffId}
@@ -5533,6 +5593,8 @@ function Payroll({
                 개별 PDF
               </button>
             </div>
+              ))}
+            </section>
           ))
         ) : (
           <div className="empty-schedule">
@@ -5707,7 +5769,7 @@ function ManagerReceiptUpload({ organizationId, onClose, onProcessed, onOpenRevi
       variant="manager-receipt-modal"
     >
       <p className="modal-text">
-        원본 등록 후 Timefit AX 또는 OCR 분석, 지출 생성, 카드 대조와 검토함 등록을 자동으로 시작합니다. Google Drive에도 원본을 백업합니다.
+        원본 등록 후 Timefit AX 분석, 지출 생성, 카드 대조와 검토함 등록을 자동으로 시작합니다. Google Drive에도 원본을 백업합니다.
       </p>
       {result ? (
         <div className="manager-receipt-success" role="status">
@@ -5792,10 +5854,9 @@ function ExpenseWorkspace({
   navigationContext,
   onNavigate,
   canReview = false,
+  canUpload = false,
 }) {
-  const stateKey = expenseWorkspaceStateKey(accountId, organizationId);
-  const restoredState = readExpenseUiState(stateKey, normalizeExpenseWorkspaceState);
-  const initialSection = navigationContext?.cardReview ? "cards" : restoredState.section;
+  const initialSection = navigationContext?.cardReview ? "cards" : "overview";
   const [section, setSection] = useState(initialSection);
   const [showReceiptUpload, setShowReceiptUpload] = useState(false);
   const [receiptRevision, setReceiptRevision] = useState(0);
@@ -5807,9 +5868,6 @@ function ExpenseWorkspace({
   useEffect(() => {
     if (navigationContext?.cardReview) selectSection("cards");
   }, [navigationContext?.cardReview, navigationContext?.month]);
-  useEffect(() => {
-    writeExpenseUiState(stateKey, { section }, normalizeExpenseWorkspaceState);
-  }, [section, stateKey]);
   const fromException = (item) => {
     if (item.target === "receipts") {
       selectSection("evidence");
@@ -5840,13 +5898,15 @@ function ExpenseWorkspace({
           <h1>지출 · 증빙</h1>
           <span>업무별 탭에서 지출 원천과 증빙을 확인하세요.</span>
         </div>
-        <button
-          type="button"
-          className="cta"
-          onClick={() => setShowReceiptUpload(true)}
-        >
-          ＋ 영수증 업로드
-        </button>
+        {canUpload && (
+          <button
+            type="button"
+            className="cta"
+            onClick={() => setShowReceiptUpload(true)}
+          >
+            ＋ 영수증 업로드
+          </button>
+        )}
       </div>
       {showReceiptUpload && (
         <ManagerReceiptUpload
@@ -7235,17 +7295,20 @@ function Employees({
 }) {
   const [query, setQuery] = useState("");
   const visibleEmployees = employees.filter((employee) =>
-    `${employee.name} ${employee.team} ${employee.role}`.includes(query.trim()),
+    `${employee.name} ${employee.team} ${employee.role} ${employee.pay}`.includes(query.trim()),
   );
-  const employeeGroups = groupStaffByType(visibleEmployees);
-  const allEmployeeGroups = groupStaffByType(employees);
-  const moveWithinDepartment = (employee, direction) => {
+  const employeeGroups = groupStaffByPayTypeAndWorkArea(visibleEmployees);
+  const allEmployeeGroups = groupStaffByPayTypeAndWorkArea(employees);
+  const moveWithinWorkArea = (employee, direction) => {
     if (!onMove) return;
-    const group = allEmployeeGroups.find(({ staff }) =>
+    const payGroup = allEmployeeGroups.find(({ staff }) =>
       staff.some(({ id }) => id === employee.id),
     );
-    const position = group?.staff.findIndex(({ id }) => id === employee.id) ?? -1;
-    const target = group?.staff[position + direction];
+    const workArea = payGroup?.workAreas.find(({ staff }) =>
+      staff.some(({ id }) => id === employee.id),
+    );
+    const position = workArea?.staff.findIndex(({ id }) => id === employee.id) ?? -1;
+    const target = workArea?.staff[position + direction];
     if (!target) return;
     onMove(
       employees.findIndex(({ id }) => id === employee.id),
@@ -7258,6 +7321,7 @@ function Employees({
         <div>
           <p>재직 {employees.length}명</p>
           <h1>직원 관리</h1>
+          <span>급여 형태별로 구분하고, 각 구분 안에서 홀·주방 등 업무 분야별로 표시합니다.</span>
         </div>
         <div className="page-title-actions">
           {canInvite && (
@@ -7278,7 +7342,7 @@ function Employees({
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="이름, 부서, 직책으로 검색"
+            placeholder="이름, 급여 형태, 부서, 직책으로 검색"
           />
         </div>
         {employeeGroups.length ? (
@@ -7288,65 +7352,80 @@ function Employees({
                 <b>{group.type}</b>
                 <span>{group.staff.length}명</span>
               </div>
-              {group.staff.map((e) => {
-                const fullGroup = allEmployeeGroups.find(
-                  ({ type }) => type === group.type,
-                );
-                const position =
-                  fullGroup?.staff.findIndex(({ id }) => id === e.id) ?? -1;
-                return (
-                  <div
-                    className="employee-row clickable-row"
-                    key={e.id}
-                    onClick={() => onSelect(e)}
-                  >
-                    <Avatar name={e.name} color={e.color} />
-                    <span className="grow">
-                      <span className="employee-name-line">
-                        {canReorder && (
-                          <span className="employee-order-controls">
+              <div className="staff-work-area-list">
+                {group.workAreas.map((workArea) => {
+                  const fullPayGroup = allEmployeeGroups.find(
+                    ({ type }) => type === group.type,
+                  );
+                  const fullWorkArea = fullPayGroup?.workAreas.find(
+                    ({ type }) => type === workArea.type,
+                  );
+                  const areaColor = workArea.staff[0]?.categoryColor || "#8b95a1";
+                  return (
+                    <section className="staff-work-area-group" key={`${group.type}-${workArea.type}`}>
+                      <div className="staff-work-area-heading" style={{ "--work-area-color": areaColor }}>
+                        <span><i />{workArea.type}</span>
+                        <b>{workArea.staff.length}명</b>
+                      </div>
+                      {workArea.staff.map((e) => {
+                        const position = fullWorkArea?.staff.findIndex(({ id }) => id === e.id) ?? -1;
+                        return (
+                          <div
+                            className="employee-row clickable-row"
+                            key={e.id}
+                            onClick={() => onSelect(e)}
+                          >
+                            <Avatar name={e.name} color={e.color} />
+                            <span className="grow">
+                              <span className="employee-name-line">
+                                {canReorder && (
+                                  <span className="employee-order-controls">
+                                    <button
+                                      type="button"
+                                      disabled={position <= 0}
+                                      aria-label={`${e.name} ${workArea.type} 내 위로 이동`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        moveWithinWorkArea(e, -1);
+                                      }}
+                                    >
+                                      ↑
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={position >= (fullWorkArea?.staff.length ?? 0) - 1}
+                                      aria-label={`${e.name} ${workArea.type} 내 아래로 이동`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        moveWithinWorkArea(e, 1);
+                                      }}
+                                    >
+                                      ↓
+                                    </button>
+                                  </span>
+                                )}
+                                <b>{e.name}</b>
+                              </span>
+                              <small>{e.team} · {e.role}</small>
+                            </span>
+                            {canViewPayroll && <span>{e.pay}</span>}
+                            <Chip type="green">재직</Chip>
                             <button
-                              type="button"
-                              disabled={position <= 0}
-                              aria-label={`${e.name} 부서 내 위로 이동`}
+                              className="outline"
                               onClick={(event) => {
                                 event.stopPropagation();
-                                moveWithinDepartment(e, -1);
+                                onSelect(e);
                               }}
                             >
-                              ↑
+                              상세
                             </button>
-                            <button
-                              type="button"
-                              disabled={position >= (fullGroup?.staff.length ?? 0) - 1}
-                              aria-label={`${e.name} 부서 내 아래로 이동`}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                moveWithinDepartment(e, 1);
-                              }}
-                            >
-                              ↓
-                            </button>
-                          </span>
-                        )}
-                        <b>{e.name}</b>
-                      </span>
-                      <small>{e.role}</small>
-                    </span>
-                    {canViewPayroll && <span>{e.pay}</span>}
-                    <Chip type="green">재직</Chip>
-                    <button
-                      className="outline"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onSelect(e);
-                      }}
-                    >
-                      상세
-                    </button>
-                  </div>
-                );
-              })}
+                          </div>
+                        );
+                      })}
+                    </section>
+                  );
+                })}
+              </div>
             </section>
           ))
         ) : (
@@ -7462,7 +7541,7 @@ function EmployeeDetail({
                 ["이번 달 예상", formatMoney(pay)],
               ],
             };
-  const detailAttendance = attendanceMonthRows;
+  const detailAttendance = attendanceMonthRows.filter(isVisibleAttendanceDay);
   const weekDays = weekDaysFor(currentDateKey);
   const weeklySchedules = weekDays.map((day) => {
     const shift = (schedules[day.id] || []).find(
@@ -7784,7 +7863,6 @@ function EmployeeDetail({
           onClose={() => setAttendanceCorrection(null)}
         >
           <EmployeeAttendanceCorrectionForm
-            employee={profile}
             row={attendanceCorrection}
             onCancel={() => setAttendanceCorrection(null)}
             onSave={async (values) => {
@@ -8702,8 +8780,7 @@ const plannedMinutes = (row) => {
 
 function EmployeeHome({
   setActive,
-  checkedIn,
-  setCheckedIn,
+  attendanceAction,
   profile,
   employee,
   schedules,
@@ -8737,10 +8814,13 @@ function EmployeeHome({
           <p>오늘도 좋은 하루 보내세요.</p>
         </div>
         <button
-          className={checkedIn ? "checkin complete" : "checkin"}
-          onClick={() => setCheckedIn(!checkedIn)}
+          className={attendanceAction === EMPLOYEE_ATTENDANCE_ACTIONS.COMPLETED ? "checkin complete" : "checkin"}
+          disabled={attendanceAction === EMPLOYEE_ATTENDANCE_ACTIONS.COMPLETED}
+          onClick={() => setActive("myAttendance")}
         >
-          {checkedIn ? "✓ 출근 완료" : "◷ 출근 기록"}
+          {attendanceAction === EMPLOYEE_ATTENDANCE_ACTIONS.COMPLETED
+            ? "✓ 출퇴근 완료"
+            : `◷ ${attendanceActionLabel(attendanceAction)}`}
         </button>
       </div>
       {profile?.employee_code && (
@@ -8915,19 +8995,24 @@ function MySchedule({ employee, schedules, profile }) {
   );
 }
 
-function QrAttendance({ checkedIn, setCheckedIn }) {
+function QrAttendance({ attendanceAction, setAttendanceAction }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const cameraAttemptRef = useRef(0);
   const requestKeyRef = useRef(null);
   const [isOpen, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const [status, setStatus] = useState("매장 QR 코드를 카메라에 비춰 주세요.");
   const stopCamera = () => {
+    cameraAttemptRef.current += 1;
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
   };
   useEffect(() => () => stopCamera(), []);
   const completeAttendance = async (token) => {
+    setBusy(true);
     try {
       if (!token)
         throw new Error("실제 출퇴근은 유효한 업장 QR 코드가 필요합니다.");
@@ -8940,8 +9025,7 @@ function QrAttendance({ checkedIn, setCheckedIn }) {
       if (result?.action === "review_required")
         throw new Error("이전 출근 기록을 관리자가 확인해야 합니다.");
       requestKeyRef.current = null;
-      const isCheckedIn = result?.nextAction === "check_out";
-      setCheckedIn(isCheckedIn);
+      setAttendanceAction(result?.nextAction || attendanceAction);
       setStatus(
         `QR 인증 완료 · ${result?.action === "check_out" ? "퇴근" : "출근"} 처리됐어요.`,
       );
@@ -8950,21 +9034,34 @@ function QrAttendance({ checkedIn, setCheckedIn }) {
         error.message ||
           "출퇴근 기록을 저장하지 못했습니다. 네트워크와 QR 유효 시간을 확인해 주세요.",
       );
+    } finally {
+      setBusy(false);
     }
   };
   const startCamera = async () => {
     setCameraError("");
+    setStatus("매장 QR 코드를 카메라에 비춰 주세요.");
     setOpen(true);
+    const cameraAttempt = cameraAttemptRef.current + 1;
+    cameraAttemptRef.current = cameraAttempt;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: "environment" } },
         audio: false,
       });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+      if (cameraAttemptRef.current !== cameraAttempt) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
       }
+      streamRef.current = stream;
+      let video = videoRef.current;
+      for (let frame = 0; !video && frame < 10; frame += 1) {
+        await new Promise((resolve) => window.requestAnimationFrame(resolve));
+        video = videoRef.current;
+      }
+      if (!video) throw new Error("camera_preview_unavailable");
+      video.srcObject = stream;
+      await video.play();
       if ("BarcodeDetector" in window) {
         const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
         const scan = async () => {
@@ -8981,8 +9078,14 @@ function QrAttendance({ checkedIn, setCheckedIn }) {
           window.setTimeout(scan, 450);
         };
         scan();
-      } else setStatus("카메라 촬영 후 하단 버튼으로 인증을 완료해 주세요.");
+      } else {
+        stopCamera();
+        setCameraError(
+          "이 브라우저는 QR 인식을 지원하지 않습니다. 최신 Chrome 또는 Safari에서 다시 시도해 주세요.",
+        );
+      }
     } catch (_) {
+      stopCamera();
       setCameraError(
         "카메라를 사용할 수 없습니다. 브라우저 권한을 허용한 뒤 다시 시도해 주세요.",
       );
@@ -8993,11 +9096,25 @@ function QrAttendance({ checkedIn, setCheckedIn }) {
       <div className="qr-icon">⌘</div>
       <div>
         <p>QR 출퇴근</p>
-        <h2>{checkedIn ? "퇴근할 시간이에요" : "업장 QR로 출근하기"}</h2>
+        <h2>
+          {attendanceAction === EMPLOYEE_ATTENDANCE_ACTIONS.COMPLETED
+            ? "오늘 출퇴근을 완료했어요"
+            : attendanceAction === EMPLOYEE_ATTENDANCE_ACTIONS.CHECK_OUT
+              ? "업장 QR로 퇴근하기"
+              : "업장 QR로 출근하기"}
+        </h2>
         <span>{status}</span>
       </div>
-      <button className="cta" onClick={startCamera}>
-        QR 스캔
+      <button
+        className="cta"
+        disabled={busy || attendanceAction === EMPLOYEE_ATTENDANCE_ACTIONS.COMPLETED}
+        onClick={startCamera}
+      >
+        {busy
+          ? "처리 중…"
+          : attendanceAction === EMPLOYEE_ATTENDANCE_ACTIONS.COMPLETED
+            ? "출퇴근 완료"
+            : `${attendanceActionLabel(attendanceAction)} QR 스캔`}
       </button>
       {isOpen && (
         <div className="scanner">
@@ -9021,7 +9138,7 @@ function QrAttendance({ checkedIn, setCheckedIn }) {
   );
 }
 
-function MyAttendance({ checkedIn, setCheckedIn, employee }) {
+function MyAttendance({ attendanceAction, setAttendanceAction, employee }) {
   const history = employee?.attendanceHistory || [];
   const totalMinutes = history
     .filter((row) => row.work_date >= weekDaysFor(todayKey)[0].id)
@@ -9034,7 +9151,7 @@ function MyAttendance({ checkedIn, setCheckedIn, employee }) {
           <h1>출퇴근</h1>
         </div>
       </div>
-      <QrAttendance checkedIn={checkedIn} setCheckedIn={setCheckedIn} />
+      <QrAttendance attendanceAction={attendanceAction} setAttendanceAction={setAttendanceAction} />
       <section className="card full-card">
         <div className="card-title">
           <div>
@@ -9175,6 +9292,33 @@ function MyLeave({ setModal, leaveRequests, profile, employee }) {
   );
 }
 
+function AccountModeSwitch({ mode, onChange, className = "" }) {
+  return (
+    <div
+      className={`mode-switch ${className}`.trim()}
+      role="group"
+      aria-label="업무 화면 전환"
+    >
+      <button
+        type="button"
+        className={mode === "employee" ? "active" : ""}
+        aria-pressed={mode === "employee"}
+        onClick={() => onChange("employee")}
+      >
+        직원 업무
+      </button>
+      <button
+        type="button"
+        className={mode === "manager" ? "active" : ""}
+        aria-pressed={mode === "manager"}
+        onClick={() => onChange("manager")}
+      >
+        관리자 업무
+      </button>
+    </div>
+  );
+}
+
 function App() {
   useEffect(() => {
     document
@@ -9213,6 +9357,7 @@ function App() {
   const [selectedLeave, setSelectedLeave] = useState(initialLeaveRequests[0]);
   const [modal, setModal] = useState(null);
   const [checkedIn, setCheckedIn] = usePersistedState("checked-in", false);
+  const [employeeAttendanceOverride, setEmployeeAttendanceOverride] = useState(null);
   const [toast, setToast] = useState("");
   const [authContext, setAuthContext] = useState({
     session: null,
@@ -9238,6 +9383,7 @@ function App() {
     setSelectedEmployee(null);
     setSelectedLeave(null);
     setModal(null);
+    setEmployeeAttendanceOverride(null);
   };
   // Preserve the last successful response in this browser tab. Returning to a
   // page or refreshing its token must not briefly replace real data with zeros.
@@ -9246,6 +9392,13 @@ function App() {
     const organizationId = context?.membership?.organization_id;
     return userId && organizationId
       ? `timefit:workforce:${userId}:${organizationId}`
+      : null;
+  };
+  const accountModeStorageKey = (context) => {
+    const userId = context?.session?.user?.id;
+    const organizationId = context?.membership?.organization_id;
+    return userId && organizationId
+      ? `timefit:account-mode:${userId}:${organizationId}`
       : null;
   };
   const restoreWorkforceSnapshot = (context) => {
@@ -9327,9 +9480,23 @@ function App() {
         setAuthError("");
         setAuthContext(context);
         if (accountRole) {
-          setMode(accountRole === "manager" ? "manager" : "employee");
+          const isLinkedEmployeeManager =
+            context.managementAccount?.account_origin === "linked_employee";
+          const modeKey = accountModeStorageKey(context);
+          const savedMode = modeKey
+            ? window.localStorage.getItem(modeKey)
+            : null;
+          const nextMode = isLinkedEmployeeManager
+            ? ["employee", "manager"].includes(savedMode)
+              ? savedMode
+              : "employee"
+            : accountRole === "manager"
+              ? "manager"
+              : "employee";
+          if (isLinkedEmployeeManager) setMode(nextMode);
+          else setMode(accountRole === "manager" ? "manager" : "employee");
           if (isNewAccountContext)
-            setActive(accountRole === "manager" ? "dashboard" : "employeeHome");
+            setActive(nextMode === "manager" ? "dashboard" : "employeeHome");
         }
       } catch (error) {
         if (activeEffect && generation === authGenerationRef.current) {
@@ -9745,6 +9912,10 @@ function App() {
     authContext.isOrganizationOwner ||
       authContext.managementAccount?.permissions?.includes("payroll.view"),
   );
+  const canManagePayroll = Boolean(
+    authContext.isOrganizationOwner ||
+      authContext.managementAccount?.permissions?.includes("payroll.manage"),
+  );
   const canViewCompensation = Boolean(
     authContext.isOrganizationOwner ||
       authContext.managementAccount?.permissions?.includes(
@@ -9815,6 +9986,10 @@ function App() {
           "expense.export",
         ].includes(code),
       ),
+  );
+  const canUploadReceipts = Boolean(
+    authContext.isOrganizationOwner ||
+      authContext.managementAccount?.permissions?.includes("expense.manage"),
   );
   const managerContent = {
     dashboard: (
@@ -9976,7 +10151,10 @@ function App() {
           employees={employees}
           leaveRequests={leaveRequests}
           onSelect={openEmployeeDetail}
-          canManage={authContext.isOrganizationOwner}
+          canManage={canManagePayroll}
+          authorizeWrite={() =>
+            revalidateManagementPermission("payroll.manage")
+          }
         />
       </>
     ),
@@ -10009,6 +10187,7 @@ function App() {
               ["expense.receipt.review", "expense.manage"].includes(code),
             ),
         )}
+        canUpload={canUploadReceipts}
       />
     ) : null,
     feedback: (
@@ -10082,6 +10261,12 @@ function App() {
   const currentEmployee =
     employees.find((item) => item.userId === authContext.session?.user?.id) ||
     null;
+  const employeeAttendanceAction =
+    employeeAttendanceOverride?.workDate === todayKey
+      ? employeeAttendanceOverride.action
+      : attendanceActionForEmployee(currentEmployee, todayKey);
+  const setEmployeeAttendanceAction = (action) =>
+    setEmployeeAttendanceOverride({ workDate: todayKey, action });
   const managerIdentity =
     authContext.managementAccount?.login_id ||
     authContext.session?.user?.email ||
@@ -10091,8 +10276,7 @@ function App() {
     employeeHome: (
       <EmployeeHome
         setActive={setActive}
-        checkedIn={checkedIn}
-        setCheckedIn={setCheckedIn}
+        attendanceAction={employeeAttendanceAction}
         profile={authContext.profile}
         employee={currentEmployee}
         schedules={schedules}
@@ -10108,8 +10292,8 @@ function App() {
     ),
     myAttendance: (
       <MyAttendance
-        checkedIn={checkedIn}
-        setCheckedIn={setCheckedIn}
+        attendanceAction={employeeAttendanceAction}
+        setAttendanceAction={setEmployeeAttendanceAction}
         employee={currentEmployee}
       />
     ),
@@ -10131,6 +10315,7 @@ function App() {
   const permissionNavMap = {
     dashboard: "dashboard.view",
     attendance: "attendance.view",
+    shortTerm: "attendance.view",
     schedule: "schedule.view",
     leave: "leave.view",
     payroll: "payroll.view",
@@ -10159,9 +10344,43 @@ function App() {
       ),
     }))
     .filter((group) => group.items.length);
+  const canSwitchAccountMode =
+    authContext.managementAccount?.account_origin === "linked_employee";
+  const switchAccountMode = (nextMode) => {
+    if (
+      !canSwitchAccountMode ||
+      !["employee", "manager"].includes(nextMode)
+    )
+      return;
+    const key = accountModeStorageKey(authContext);
+    if (key) window.localStorage.setItem(key, nextMode);
+    setMode(nextMode);
+    setModal(null);
+    setNavigationContext({});
+    if (nextMode === "manager") {
+      const landing = permittedNav[0]?.[0] || "dashboard";
+      navigateManager(landing);
+    } else {
+      setActive("employeeHome");
+    }
+  };
+  const managerMobilePriority = ["dashboard", "schedule", "documents"];
+  const managerMobilePrimary = managerMobilePriority
+    .map((id) => permittedNav.find((item) => item[0] === id))
+    .filter(Boolean);
+  const managerMobileFallback = permittedNav.filter(
+    ([id]) => !managerMobilePrimary.some(([primaryId]) => primaryId === id),
+  );
   const mobileNav =
     mode === "manager"
-      ? [...permittedNav.slice(0, 3), ["more", "더보기", "⋯"]]
+      ? [
+          ...managerMobilePrimary,
+          ...managerMobileFallback.slice(
+            0,
+            Math.max(0, 3 - managerMobilePrimary.length),
+          ),
+          ["more", "전체", "☰"],
+        ]
       : employeeNav;
   const screenContentByMode =
     mode === "manager" ? managerContent : employeeContent;
@@ -10188,9 +10407,6 @@ function App() {
   const mountedScreenIds = Array.from(
     new Set([...retainedScreenIds, active]),
   ).filter((id) => screenContentByMode[id] !== undefined);
-  // A visited screen stays mounted while another menu is open. Its local data,
-  // filters and form state therefore survive navigation, and mount-time API
-  // requests only run on the first visit (or after an account/business switch).
   const content = (
     <>
       {mountedScreenIds.map((id) => (
@@ -10755,6 +10971,13 @@ function App() {
           <span>✓</span>
           <b>timefit</b>
         </div>
+        {canSwitchAccountMode && (
+          <AccountModeSwitch
+            mode={mode}
+            onChange={switchAccountMode}
+            className="sidebar-switch"
+          />
+        )}
         <nav className={mode === "manager" ? "manager-sidebar-nav" : ""}>
           {mode === "manager" ? (
             <>
@@ -10826,6 +11049,13 @@ function App() {
               <span>✓</span>
               <b>timefit</b>
             </div>
+            {canSwitchAccountMode && (
+              <AccountModeSwitch
+                mode={mode}
+                onChange={switchAccountMode}
+                className="header-mode-switch"
+              />
+            )}
             {mode === "manager" && (
               <ManagerGroupTabs
                 groups={permittedGroups}
@@ -11317,7 +11547,7 @@ function App() {
           onClose={() => setModal(null)}
         >
           <div className="more-menu more-menu-scroll">
-            {permittedNav.slice(3).map(([id, label, icon]) => (
+            {permittedNav.map(([id, label, icon]) => (
               <button
                 key={id}
                 onClick={() => {

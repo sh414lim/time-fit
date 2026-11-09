@@ -174,49 +174,15 @@ export async function processReceiptRun({ organizationId, documentId, runId }) {
     const pages = await financeRest(`timefit_user_finance_document_pages?document_id=eq.${encodeURIComponent(documentId)}&select=*&order=page_number.asc`);
     const sourcePages = pages.length ? pages : [{ storage_path: document.storage_path, mime_type: document.mime_type }];
     if (sourcePages.some(page => !String(page.mime_type || '').startsWith('image/'))) throw new Error('receipt_image_required');
-    let text = ''; let extracted = null; let llmResult = null; let llmError = null; let axResult = null; let axError = null;
-    if (timefitAxConfigured()) {
-      try {
-        axResult = await extractReceiptWithTimefitAx({
-          organizationId, documentId, runId,
-          storagePaths: sourcePages.map(page => page.storage_path),
-        });
-        text = axResult.rawText;
-        extracted = { ...axResult.extracted, imageContentSha256: axResult.imageContentSha256, axRequestId: axResult.requestId };
-        await financeRest(`timefit_user_expense_processing_runs?id=eq.${encodeURIComponent(runId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ heartbeat_at: new Date().toISOString() }) });
-      } catch (error) {
-        axError = error;
-        console.error('timefit_ax_receipt_fallback', { documentId, runId, message: error.message });
-      }
-    }
-    if (!extracted) {
-      const pageResults = [];
-      for (const page of sourcePages) {
-        pageResults.push(await visionText(await downloadDocument(page.storage_path)));
-        await financeRest(`timefit_user_expense_processing_runs?id=eq.${encodeURIComponent(runId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ heartbeat_at: new Date().toISOString() }) });
-      }
-      text = pageResults.map(result => result.text).filter(Boolean).join('\n\n--- page ---\n\n');
-      if (!text.trim()) throw new Error('receipt_text_not_found');
-      const spatialPages = pageResults.map(result => structuredReceipt(result.text, result.annotation));
-      const combined = structuredReceipt(text);
-      const primary = spatialPages[0] || {};
-      const ruleBased = {
-        ...combined,
-        ...primary,
-        merchantName: primary.merchantName || combined.merchantName,
-        merchantBusinessNumber: primary.merchantBusinessNumber || combined.merchantBusinessNumber,
-        transactionDate: primary.transactionDate || combined.transactionDate,
-        totalAmount: primary.totalAmount || combined.totalAmount,
-        lineItems: spatialPages.flatMap(page => page.lineItems || []).map((item, index) => ({ ...item, lineNumber: index + 1 })),
-      };
-      try { llmResult = await extractReceiptWithLlm(text); } catch (error) { llmError = error; }
-      extracted = mergeReceiptExtractions(ruleBased, llmResult);
-    }
-    const extractionModel = axResult?.model || llmResult?.model || null;
-    const fallbackUsed = Boolean(axError) || (!axResult && !llmResult);
-    const processingWarning = axError
-      ? `timefit_ax_fallback:${String(axError.message || 'failed').slice(0, 120)}`
-      : llmError ? String(llmError.message || 'llm_fallback').slice(0, 160) : null;
+    if (!timefitAxConfigured()) throw new Error('timefit_ax_not_configured');
+    const axResult = await extractReceiptWithTimefitAx({
+      organizationId, documentId, runId, storagePaths: sourcePages.map(page => page.storage_path),
+    });
+    const text = axResult.rawText;
+    let extracted = { ...axResult.extracted, imageContentSha256: axResult.imageContentSha256, axRequestId: axResult.requestId };
+    const extractionModel = axResult.model;
+    const fallbackUsed = false;
+    const processingWarning = null;
     const rules = await financeRest(`timefit_user_expense_classification_rules?organization_id=eq.${encodeURIComponent(organizationId)}&is_active=eq.true&select=id,match_type,match_value,category,default_reason,priority,is_active,hit_count&order=priority.desc&limit=200`);
     const classificationRule = matchingClassificationRule(extracted, rules);
     if (classificationRule) {
@@ -247,7 +213,7 @@ export async function processReceiptRun({ organizationId, documentId, runId }) {
     const candidates = await replaceCandidates({ organizationId, documentId, expense, extracted });
     if (classificationRule) await financeRest(`timefit_user_expense_classification_rules?id=eq.${encodeURIComponent(classificationRule.id)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ hit_count: Number(classificationRule.hit_count || 0) + 1, last_applied_at: new Date().toISOString(), updated_at: new Date().toISOString() }) });
     await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ processing_status: 'ready', review_status: validation.requiresSubmitterReview ? 'submitter_review' : 'manager_review', payment_method: document.payment_method || extracted.paymentMethod, document_date: extracted.transactionDate, extracted_data: extracted, ocr_text: text.slice(0,50000), receipt_fingerprint: fingerprint, processed_at: new Date().toISOString() }) });
-    await finishRun(runId, { status: 'succeeded', extraction_provider: extracted.extractionProvider, extraction_model: extractionModel, input_tokens: llmResult?.usage?.input_tokens || null, output_tokens: llmResult?.usage?.output_tokens || null, fallback_used: fallbackUsed, error_code: processingWarning });
+    await finishRun(runId, { status: 'succeeded', extraction_provider: extracted.extractionProvider, extraction_model: extractionModel, input_tokens: null, output_tokens: null, fallback_used: fallbackUsed, error_code: processingWarning });
     return { expenseId: expense.id, candidateCount: candidates.length };
   } catch (error) {
     await finishRun(runId, { status: 'failed', error_code: String(error.message || 'receipt_processing_failed').slice(0,160) }).catch(() => {});
@@ -297,7 +263,7 @@ async function enqueueRun({ organizationId, documentId, userId }) {
   }
   const recent = await financeRest(`timefit_user_expense_processing_runs?document_id=eq.${encodeURIComponent(documentId)}&select=id&order=created_at.desc&limit=5`);
   if (recent.length >= 5) throw new Error('receipt_retry_limit');
-  const rows = await financeRest('timefit_user_expense_processing_runs', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify([{ organization_id: organizationId, document_id: documentId, status: 'queued', ocr_provider: 'google_vision', ocr_model: 'DOCUMENT_TEXT_DETECTION', extractor_version: 'receipt-v2', created_by: userId }]) });
+  const rows = await financeRest('timefit_user_expense_processing_runs', { method: 'POST', headers: { Prefer: 'return=representation' }, body: JSON.stringify([{ organization_id: organizationId, document_id: documentId, status: 'queued', ocr_provider: 'timefit_ax', ocr_model: null, extractor_version: 'receipt-v2', created_by: userId }]) });
   const run = rows[0];
   await financeRest(`timefit_user_finance_documents?id=eq.${encodeURIComponent(documentId)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ processing_status: 'queued', processing_error: null }) });
   return { run, duplicateRequest: false, shouldProcess: true };
