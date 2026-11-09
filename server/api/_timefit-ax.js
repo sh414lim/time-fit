@@ -91,7 +91,7 @@ export async function createTimefitAxSignedUrl(storagePath, expiresIn = 600) {
   return absoluteSignedUrl(payload.signedURL || payload.signedUrl);
 }
 
-export function normalizeTimefitAxExtraction(value = {}) {
+export function normalizeTimefitAxExtraction(value = {}, provider = 'unknown') {
   const confidence = Math.max(0, Math.min(1, Number(value.confidence) || 0));
   const normalized = validateReceiptExtraction({
     merchantName: value.merchantName,
@@ -130,7 +130,7 @@ export function normalizeTimefitAxExtraction(value = {}) {
     documentType: value.documentType || 'unknown',
     currency: value.currency || 'UNKNOWN',
     warnings: Array.isArray(value.warnings) ? value.warnings.map(item => String(item)).slice(0, 20) : [],
-    extractionProvider: 'timefit_ax_codex',
+    extractionProvider: provider === 'openai_image' ? 'timefit_ax_openai_image' : provider === 'codex_image' ? 'timefit_ax_codex' : 'timefit_ax_unknown',
   };
 }
 
@@ -158,11 +158,12 @@ export async function extractReceiptWithTimefitAx({ organizationId, documentId, 
   if (!response.ok || payload.state !== 'SUCCEEDED' || !payload.extraction) {
     throw new Error(String(payload.error || payload.errorCode || `timefit_ax_${response.status}`).slice(0, 300));
   }
+  if (!['openai_image', 'codex_image'].includes(payload.provider) || typeof payload.model !== 'string' || !payload.model.trim()) throw new Error('timefit_ax_image_llm_required');
   return {
     requestId,
     rawText: String(payload.extraction.rawText || ''),
-    extracted: normalizeTimefitAxExtraction(payload.extraction),
+    extracted: normalizeTimefitAxExtraction(payload.extraction, payload.provider),
     imageContentSha256: payload.imageContentSha256 || null,
-    model: 'codex-cli',
+    model: payload.model,
   };
 }
