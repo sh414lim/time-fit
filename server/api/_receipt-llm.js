@@ -51,7 +51,7 @@ const cleanText = value => typeof value === 'string' && value.trim() ? value.tri
 const cleanDate = value => /^20\d{2}-\d{2}-\d{2}$/.test(value || '') ? value : null;
 const cleanTime = value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value || '') ? value : null;
 const cleanAmount = value => Number.isInteger(value) && value >= 0 ? value : null;
-const cleanNumber = value => Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
+const cleanNumber = value => value === null || value === undefined || value === '' ? null : Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
 const cleanConfidence = value => Math.max(0, Math.min(1, Number(value) || 0));
 export const normalizeReceiptItemName = value => String(value || '').trim().toLowerCase()
   .replace(/\b(kg|g|ml|l|ea|개|봉|팩|박스|box)\b/gi, ' $1 ')
