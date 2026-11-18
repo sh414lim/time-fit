@@ -4,6 +4,7 @@ import {
   groupGranterFinanceRows,
   normalizeGranterFinanceTicket,
   summarizeGranterFinanceRows,
+  todayInSeoul,
 } from '../server/api/granter-finance-analytics.js';
 import { filterGranterRows, formatBusinessNumber, summarizeFilteredGranterRows } from '../src/features/finance/granterAnalyticsModel.js';
 
@@ -70,4 +71,8 @@ test('client filters search business numbers and summarize the visible rows', ()
   assert.equal(filtered.length, 1);
   assert.equal(summarizeFilteredGranterRows(filtered).outAmount, 5000);
   assert.equal(formatBusinessNumber('8108603669'), '810-86-03669');
+});
+
+test('all-period analytics ends on the current Seoul business date', () => {
+  assert.equal(todayInSeoul(new Date('2026-11-18T16:30:00.000Z')), '2026-11-19');
 });

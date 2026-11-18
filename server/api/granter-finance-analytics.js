@@ -64,6 +64,17 @@ const registrationNumber = value => {
   return digits.length >= 10 ? digits : '';
 };
 
+export function todayInSeoul(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const value = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
 function dateWindows(from, to) {
   const windows = [];
   let cursor = new Date(`${from}T00:00:00Z`);
@@ -331,7 +342,15 @@ async function buildAnalytics({ from, to, scope }) {
     const ticketType = GRANTER_FINANCE_TICKET_TYPES[index];
     if (result.status === 'rejected') {
       warnings.push(`ticket:${ticketType}`);
-      sourceStatus.push({ ticketType, label: GRANTER_TICKET_LABELS[ticketType], status: 'failed', count: 0 });
+      const statusCode = Number(result.reason?.status) || null;
+      sourceStatus.push({
+        ticketType,
+        label: GRANTER_TICKET_LABELS[ticketType],
+        status: 'failed',
+        count: 0,
+        statusCode,
+        reason: statusCode === 403 ? 'API 권한 확인' : statusCode === 400 ? '연동 자산 확인' : '연동 확인',
+      });
       return;
     }
     revision ||= result.value.revision;
@@ -403,15 +422,16 @@ export default async function handler(req, res) {
   const { organizationId, from, to } = req.query || {};
   const scope = req.query?.scope === 'all' ? 'all' : 'period';
   if (!DATE_PATTERN.test(from || '') || !DATE_PATTERN.test(to || '') || from > to) return res.status(400).json({ ok: false, error: '조회 기간을 확인해 주세요.' });
+  const effectiveTo = scope === 'all' ? todayInSeoul() : to;
   const auth = await authorizeFinance(req, organizationId, { permissionsAny: ['finance.view', 'expense.manage', 'expense.card.manage'] });
   if (!auth) return res.status(req.headers.authorization ? 403 : 401).json({ ok: false, error: '재무 조회 권한이 필요합니다.' });
   if (!granterConfigured()) return res.status(200).json({ ok: true, configured: false, error: 'Granter API 키가 설정되지 않았습니다.' });
 
-  const cacheKey = `${organizationId}:${scope}:${from}:${to}`;
+  const cacheKey = `${organizationId}:${scope}:${from}:${effectiveTo}`;
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.createdAt < CACHE_TTL_MS) return res.status(200).json({ ...cached.payload, cached: true });
   try {
-    const payload = await buildAnalytics({ from, to, scope });
+    const payload = await buildAnalytics({ from, to: effectiveTo, scope });
     cache.set(cacheKey, { createdAt: Date.now(), payload });
     if (cache.size > 20) cache.delete(cache.keys().next().value);
     return res.status(200).json(payload);
