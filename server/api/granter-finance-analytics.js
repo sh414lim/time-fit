@@ -5,9 +5,9 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const TRANSACTION_LIMIT = 4000;
 const FALLBACK_HISTORY_START = '2018-01-01';
-// Smaller windows keep high-volume bank and tax-invoice responses below
-// serverless payload and upstream timeout limits while still covering all time.
-const WINDOW_DAYS = 179;
+// Granter allows up to 366 calendar days per request. Using the full window
+// keeps all-source collection fast while the requests themselves stay serial.
+const WINDOW_DAYS = 365;
 
 export const GRANTER_FINANCE_TICKET_TYPES = Object.freeze([
   'EXPENSE_TICKET',
