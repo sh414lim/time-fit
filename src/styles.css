@@ -69,3 +69,4 @@
 .avatar.has-image{box-shadow:0 0 0 2px #fff,0 0 0 3px #dbeafe}
 .week-avatars{display:flex;align-items:center;margin-top:8px;padding-left:2px}.week-avatars .avatar{width:25px;height:25px;margin-left:-5px;border:2px solid #f7f8fa;font-size:11px}.week-avatars .avatar.category-avatar{width:auto;min-width:31px;height:25px;max-width:52px;padding:0 5px;border-radius:8px}.week-avatars .avatar i{font-size:9px;max-width:40px}.week-avatars .avatar:first-child{margin-left:0}.week .selected-day .week-avatars .avatar{border-color:#e8f3ff}
 @media(min-width:1500px){.content{width:100%;max-width:1600px}.schedule-card{max-width:1100px}}
+.app-page-stack,.app-page-panel{min-width:0}.app-page-panel[hidden]{display:none!important}

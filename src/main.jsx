@@ -8983,6 +8983,25 @@ function MyLeave({ setModal, leaveRequests, profile, employee }) {
   );
 }
 
+// Keep visited screens mounted so returning to a page preserves its data,
+// filters and local state. Inactive screens skip ordinary parent updates until
+// they become active again, avoiding unnecessary render work.
+const KeepAlivePage = React.memo(
+  function KeepAlivePage({ active, pageId, children }) {
+    return (
+      <section
+        className="app-page-panel"
+        data-page-id={pageId}
+        hidden={!active}
+        aria-hidden={!active}
+      >
+        {children}
+      </section>
+    );
+  },
+  (previous, next) => !previous.active && !next.active,
+);
+
 function App() {
   useEffect(() => {
     document
@@ -9002,6 +9021,7 @@ function App() {
   const [navigationContext, setNavigationContext] = useState({});
   const [mode, setMode] = useState("manager");
   const [active, setActive] = useState("dashboard");
+  const [visitedPages, setVisitedPages] = useState(() => new Set());
   const [managerGroup, setManagerGroup] = useState("operations");
   const [employees, setEmployees] = useState(supabase ? [] : defaultEmployees);
   const [schedules, setSchedules] = useState(
@@ -9033,6 +9053,7 @@ function App() {
   const activeAccountRef = useRef(null);
   const authResolvedRef = useRef(!supabase);
   const authGenerationRef = useRef(0);
+  const pageScrollPositionsRef = useRef(new Map());
   const clearWorkforceState = () => {
     setNavigationContext({});
     setEmployees([]);
@@ -9493,12 +9514,41 @@ function App() {
         setToast(error.message || "업무 데이터를 불러오지 못했습니다."),
       );
   }, [authContext.membership?.organization_id]);
+  const currentPageScope = `${authContext.session?.user?.id || "guest"}:${authContext.membership?.organization_id || "none"}`;
+  const pageVisitKey = (pageMode, pageId) =>
+    `${currentPageScope}:${pageMode}:${pageId}`;
+  const rememberPageScroll = (pageMode, pageId) => {
+    if (!pageId) return;
+    pageScrollPositionsRef.current.set(
+      pageVisitKey(pageMode, pageId),
+      window.scrollY,
+    );
+  };
+  const restorePageScroll = (pageMode, pageId, reset = false) => {
+    const top = reset
+      ? 0
+      : pageScrollPositionsRef.current.get(pageVisitKey(pageMode, pageId)) || 0;
+    window.requestAnimationFrame(() =>
+      window.requestAnimationFrame(() =>
+        window.scrollTo({ top, left: 0, behavior: "instant" }),
+      ),
+    );
+  };
   const navigateManager = (id, context = {}) => {
+    const changed = mode !== "manager" || active !== id;
+    if (changed) rememberPageScroll(mode, active);
     setNavigationContext(context);
     const group = managerMenuGroups.find((item) => item.items.includes(id));
     if (group) setManagerGroup(group.id);
     setActive(id);
-    window.scrollTo({ top: 0, behavior: "instant" });
+    if (changed)
+      restorePageScroll("manager", id, Object.keys(context).length > 0);
+  };
+  const navigateEmployee = (id) => {
+    const changed = mode !== "employee" || active !== id;
+    if (changed) rememberPageScroll(mode, active);
+    setActive(id);
+    if (changed) restorePageScroll("employee", id);
   };
   const openEmployeeDetail = (employee) => {
     if (!employee) return;
@@ -9869,7 +9919,7 @@ function App() {
   const employeeContent = {
     employeeHome: (
       <EmployeeHome
-        setActive={setActive}
+        setActive={navigateEmployee}
         checkedIn={checkedIn}
         setCheckedIn={setCheckedIn}
         profile={authContext.profile}
@@ -9942,10 +9992,39 @@ function App() {
     mode === "manager"
       ? [...permittedNav.slice(0, 3), ["more", "더보기", "⋯"]]
       : employeeNav;
-  const screenContent = (mode === "manager" ? managerContent : employeeContent)[
-    active
+  useEffect(() => {
+    const key = pageVisitKey(mode, active);
+    setVisitedPages((current) => {
+      if (current.has(key)) return current;
+      return new Set([...current, key]);
+    });
+  }, [currentPageScope, mode, active]);
+  useEffect(() => {
+    setVisitedPages((current) =>
+      new Set(
+        [...current].filter((key) =>
+          key.startsWith(`${currentPageScope}:`),
+        ),
+      ),
+    );
+    pageScrollPositionsRef.current = new Map(
+      [...pageScrollPositionsRef.current].filter(([key]) =>
+        key.startsWith(`${currentPageScope}:`),
+      ),
+    );
+  }, [currentPageScope]);
+  const pagePanels = [
+    ...Object.entries(managerContent).map(([id, screen]) => ({
+      id,
+      mode: "manager",
+      screen,
+    })),
+    ...Object.entries(employeeContent).map(([id, screen]) => ({
+      id,
+      mode: "employee",
+      screen,
+    })),
   ];
-  const content = screenContent;
   useEffect(() => {
     if (mode !== "manager") return;
     const group = managerMenuGroups.find((item) => item.items.includes(active));
@@ -10539,7 +10618,7 @@ function App() {
               <button
                 key={id}
                 className={active === id ? "active" : ""}
-                onClick={() => setActive(id)}
+                onClick={() => navigateEmployee(id)}
               >
                 <i>{icon}</i>
                 <span>{label}</span>
@@ -10629,7 +10708,22 @@ function App() {
               <LoadingBar label="사업장 업무 데이터를 불러오는 중…" />
             </section>
           ) : (
-            content
+            <div className="app-page-stack">
+              {pagePanels.map((page) => {
+                const visitKey = pageVisitKey(page.mode, page.id);
+                const isActive = mode === page.mode && active === page.id;
+                if (!isActive && !visitedPages.has(visitKey)) return null;
+                return (
+                  <KeepAlivePage
+                    key={visitKey}
+                    pageId={`${page.mode}:${page.id}`}
+                    active={isActive}
+                  >
+                    {page.screen}
+                  </KeepAlivePage>
+                );
+              })}
+            </div>
           )}
         </div>
       </main>
@@ -10647,7 +10741,7 @@ function App() {
                 ? setModal("more")
                 : mode === "manager"
                   ? navigateManager(id)
-                  : setActive(id)
+                  : navigateEmployee(id)
             }
           >
             <i>{icon}</i>
