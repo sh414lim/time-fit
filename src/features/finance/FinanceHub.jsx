@@ -1,6 +1,7 @@
 import React, { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { loadFinanceHub } from '../../lib/supabase';
 import { buildFinanceSeries, monthRange, normalizeFinanceHubData, summarizeFinanceRows } from './financeHubModel';
+import GranterAnalyticsPanel from './GranterAnalyticsPanel';
 
 const TABS = [['overview', '통합 현황'], ['transactions', '전체 거래'], ['cards', '법인카드'], ['banks', '통장'], ['evidence', '증빙 매칭']];
 const CATEGORY_COLORS = ['#3182f6', '#7a5af8', '#16a078', '#f59f3a', '#e85d75', '#64748b', '#3b82a0', '#a56b3f'];
@@ -80,6 +81,8 @@ export default function FinanceHub({ organizationId, onOpenLedger, onOpenEvidenc
     {error && <div className="finance-hub-warning" role="status">{error}<button onClick={refresh}>다시 시도</button></div>}
     <div className="finance-hub-tabs" role="tablist" aria-label="재무 통합 화면">{TABS.map(([id, label]) => <button key={id} role="tab" type="button" aria-selected={tab === id} onClick={() => setTab(id)}>{label}{id === 'evidence' && summary.missingEvidenceCount > 0 ? <em>{summary.missingEvidenceCount}</em> : null}</button>)}</div>
     {tab === 'overview' && <div className="finance-hub-panel">
+      <GranterAnalyticsPanel organizationId={organizationId} from={range.from} to={range.to}/>
+      <div className="finance-hub-local-heading"><div><span>TIMEFIT OPERATIONS</span><h3>타임핏 지출·증빙 운영</h3><p>타임핏에 등록된 지출과 영수증 처리 상태입니다.</p></div></div>
       <div className="finance-hub-kpis">
         <button onClick={() => openTransactions('')}><span>총 지출</span><b>{won(summary.totalExpense)}</b><small>{model.rows.filter(row => row.direction === 'withdrawal').length.toLocaleString('ko-KR')}건</small></button>
         <button onClick={() => { setType('card'); openTransactions(''); }}><span>법인카드</span><b>{won(summary.cardExpense)}</b><small>{model.rows.filter(row => row.type === 'card').length.toLocaleString('ko-KR')}건</small></button>
