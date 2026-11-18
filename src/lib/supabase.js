@@ -591,6 +591,9 @@ export async function runExpenseReminderScan(organizationId) {
 export async function loadExpenseLedger(organizationId, filters = {}) {
   return cardConnectionRequest('expenses', { query: { organizationId, ...filters } });
 }
+export async function loadFinanceHub({ organizationId, from, to }) {
+  return cardConnectionRequest('finance-hub', { query: { organizationId, from, to } });
+}
 export async function loadExpenseDetail(organizationId, expenseId) {
   return cardConnectionRequest('expense-detail', { query: { organizationId, expenseId } });
 }

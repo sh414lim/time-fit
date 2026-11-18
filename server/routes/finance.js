@@ -5,6 +5,7 @@ import expenseReminderWorker from '../api/expense-reminder-worker.js';
 import expenseReview from '../api/expense-review.js';
 import expenses from '../api/expenses.js';
 import financeReport from '../api/finance-report.js';
+import financeHub from '../api/finance-hub.js';
 import receiptProcess from '../api/receipt-process.js';
 import receiptAx from '../api/receipt-ax.js';
 
@@ -16,6 +17,7 @@ export const financeRoutes = Object.freeze({
   'expense-review': expenseReview,
   expenses,
   'finance-report': financeReport,
+  'finance-hub': financeHub,
   'receipt-process': receiptProcess,
   'receipt-ax': receiptAx,
 });

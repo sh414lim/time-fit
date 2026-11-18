@@ -16,6 +16,7 @@ import { hasCurrentManagementPermission, managementActionErrorMessage, MANAGEMEN
 import CardConnectionWizard from './features/finance/CardConnectionWizard';
 import ExpenseReviewQueue from './features/finance/ExpenseReviewQueue';
 import FinanceReportDashboard from './features/finance/FinanceReportDashboard';
+import FinanceHub from './features/finance/FinanceHub';
 import ExpenseExceptionInbox from './features/finance/ExpenseExceptionInbox';
 import EmployeeReceiptSubmission from './features/finance/EmployeeReceiptSubmission';
 import ExpenseReminderSettings from './features/finance/ExpenseReminderSettings';
@@ -5505,7 +5506,8 @@ function SalesAnalytics({
 }
 
 const EXPENSE_SECTIONS = [
-  ["overview", "현황"],
+  ["hub", "재무 통합"],
+  ["overview", "운영 현황"],
   ["ledger", "지출 원장"],
   ["evidence", "증빙 검토"],
   ["cards", "법인카드"],
@@ -5694,7 +5696,7 @@ function ExpenseWorkspace({
   onNavigate,
   canReview = false,
 }) {
-  const initialSection = navigationContext?.cardReview ? "cards" : "overview";
+  const initialSection = navigationContext?.cardReview ? "cards" : "hub";
   const [section, setSection] = useState(initialSection);
   const [showReceiptUpload, setShowReceiptUpload] = useState(false);
   const [receiptRevision, setReceiptRevision] = useState(0);
@@ -5798,6 +5800,15 @@ function ExpenseWorkspace({
         >
           {visited.has(id) && (
             <>
+              {id === "hub" && (
+                <FinanceHub
+                  key={organizationId}
+                  organizationId={organizationId}
+                  onOpenLedger={() => selectSection("ledger")}
+                  onOpenEvidence={() => selectSection("evidence")}
+                  onOpenCards={() => selectSection("cards")}
+                />
+              )}
               {id === "overview" && (
                 <>
                   <FinanceReportDashboard
