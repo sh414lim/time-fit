@@ -269,7 +269,7 @@ async function pooled(items, worker, concurrency = 3) {
   return results;
 }
 
-async function granterRequestWithRetry(path, options, attempts = 3) {
+async function granterRequestWithRetry(path, options, attempts = 4) {
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
@@ -278,7 +278,7 @@ async function granterRequestWithRetry(path, options, attempts = 3) {
       lastError = error;
       const retryable = error?.status === 429 || Number(error?.status) >= 500 || error?.name === 'TimeoutError' || error?.name === 'AbortError';
       if (!retryable || attempt === attempts - 1) throw error;
-      await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
+      await new Promise(resolve => setTimeout(resolve, 1000 * (2 ** attempt)));
     }
   }
   throw lastError;
@@ -347,9 +347,10 @@ async function buildAnalytics({ from, to, scope }) {
       const result = await granterRequestWithRetry('/api/public-docs/tickets', { method: 'POST', body: { ticketType, ...window } });
       revision ||= result.revision;
       rows.push(...arrayPayload(result.payload));
+      await new Promise(resolve => setTimeout(resolve, 250));
     }
     return { ticketType, rows, revision };
-  }, 2);
+  }, 1);
   const allRows = [];
   const sourceStatus = [];
   let revision = assetBundle.revision
