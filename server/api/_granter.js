@@ -4,7 +4,7 @@ const DEFAULT_BASE_URL = 'https://app.granter.biz';
 // A 366-day ticket query can legitimately contain thousands of bank,
 // settlement, and tax-document rows. Keep a bounded response, but allow the
 // documented full-history windows to pass without truncating valid data.
-const MAX_RESPONSE_BYTES = 12 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = 24 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 const READ_ONLY_POST_PATHS = new Set([
   '/api/public-docs/tickets',

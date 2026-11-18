@@ -5,7 +5,9 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const TRANSACTION_LIMIT = 4000;
 const FALLBACK_HISTORY_START = '2018-01-01';
-const WINDOW_DAYS = 365;
+// Smaller windows keep high-volume bank and tax-invoice responses below
+// serverless payload and upstream timeout limits while still covering all time.
+const WINDOW_DAYS = 179;
 
 export const GRANTER_FINANCE_TICKET_TYPES = Object.freeze([
   'EXPENSE_TICKET',
@@ -267,6 +269,21 @@ async function pooled(items, worker, concurrency = 3) {
   return results;
 }
 
+async function granterRequestWithRetry(path, options, attempts = 3) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await granterRequest(path, options);
+    } catch (error) {
+      lastError = error;
+      const retryable = error?.status === 429 || Number(error?.status) >= 500 || error?.name === 'TimeoutError' || error?.name === 'AbortError';
+      if (!retryable || attempt === attempts - 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, 700 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
 async function loadAssets() {
   const settled = await pooled(ASSET_TYPES, async assetType => {
     const result = await granterRequest('/api/public-docs/assets', { method: 'POST', body: { assetType } });
@@ -327,7 +344,7 @@ async function buildAnalytics({ from, to, scope }) {
     const rows = [];
     let revision = null;
     for (const window of windows) {
-      const result = await granterRequest('/api/public-docs/tickets', { method: 'POST', body: { ticketType, ...window } });
+      const result = await granterRequestWithRetry('/api/public-docs/tickets', { method: 'POST', body: { ticketType, ...window } });
       revision ||= result.revision;
       rows.push(...arrayPayload(result.payload));
     }
@@ -349,7 +366,15 @@ async function buildAnalytics({ from, to, scope }) {
         status: 'failed',
         count: 0,
         statusCode,
-        reason: statusCode === 403 ? 'API 권한 확인' : statusCode === 400 ? '연동 자산 확인' : '연동 확인',
+        reason: statusCode === 401 || statusCode === 403
+          ? 'API 키·권한 확인'
+          : statusCode === 400
+            ? '연동 자산 확인'
+            : statusCode === 429
+              ? '요청 제한 · 다시 시도'
+              : result.reason?.message === 'granter_response_too_large'
+                ? '조회량 분할 필요'
+                : '연동 확인',
       });
       return;
     }
