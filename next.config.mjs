@@ -1,3 +1,5 @@
+import { withWorkflow } from 'workflow/next';
+
 const nextConfig = {
   reactStrictMode: false,
   env: {
@@ -7,4 +9,4 @@ const nextConfig = {
   },
 };
 
-export default nextConfig;
+export default withWorkflow(nextConfig);

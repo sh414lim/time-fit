@@ -9,3 +9,4 @@ backend/.env
 .env*
 /output/
 /tmp/
+/.swc

@@ -1,5 +1,6 @@
 import { granterConfigured, granterRequest } from './_granter.js';
 import { authorizeFinance, financeError, methodNotAllowed } from './_finance-server.js';
+import { loadActiveGranterSyncRun, loadLatestGranterAnalytics, persistInlineGranterAnalytics } from './_granter-sync-store.js';
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -257,21 +258,6 @@ export function summarizeGranterFinanceRows(rows = []) {
   };
 }
 
-async function pooled(items, worker, concurrency = 3) {
-  const results = new Array(items.length);
-  let index = 0;
-  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (index < items.length) {
-      const current = index;
-      index += 1;
-      try { results[current] = { status: 'fulfilled', value: await worker(items[current]) }; }
-      catch (reason) { results[current] = { status: 'rejected', reason }; }
-    }
-  });
-  await Promise.all(runners);
-  return results;
-}
-
 export async function settleGranterRequests(tasks, { gapMs = REQUEST_GAP_MS, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   const results = [];
   for (let index = 0; index < tasks.length; index += 1) {
@@ -352,7 +338,7 @@ function earliestAvailableDate({ workspace, assets }) {
   return candidates.sort()[0] || FALLBACK_HISTORY_START;
 }
 
-async function buildAnalytics({ from, to, scope }) {
+export async function buildAnalytics({ from, to, scope, onSourceSettled }) {
   const attempts = granterAttemptsForScope(scope);
   const budget = granterBudgetForScope(scope);
   const requestPolicy = { deadlineAt: Date.now() + budget.budgetMs, timeoutMs: budget.timeoutMs };
@@ -387,17 +373,32 @@ async function buildAnalytics({ from, to, scope }) {
     : trendStart(from, 6);
   const windows = dateWindows(startDate, to);
 
-  const ticketResults = await pooled(GRANTER_FINANCE_TICKET_TYPES, async ticketType => {
-    const rows = [];
-    let revision = null;
-    for (const window of windows) {
-      const result = await granterRequestWithRetry('/api/public-docs/tickets', { method: 'POST', body: { ticketType, ...window } }, attempts, requestPolicy);
-      revision ||= result.revision;
-      rows.push(...arrayPayload(result.payload));
-      await new Promise(resolve => setTimeout(resolve, 250));
+  const ticketResults = [];
+  for (const ticketType of GRANTER_FINANCE_TICKET_TYPES) {
+    try {
+      const rawRows = [];
+      let sourceRevision = null;
+      for (const window of windows) {
+        const result = await granterRequestWithRetry('/api/public-docs/tickets', { method: 'POST', body: { ticketType, ...window } }, attempts, requestPolicy);
+        sourceRevision ||= result.revision;
+        rawRows.push(...arrayPayload(result.payload));
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      const rows = rawRows.map(row => normalizeGranterFinanceTicket(row, ticketType, assetsById, contactsById)).filter(Boolean);
+      ticketResults.push({ status: 'fulfilled', value: { ticketType, rows, revision: sourceRevision } });
+      await onSourceSettled?.({ ticketType, status: 'loaded', rows, revision: sourceRevision });
+    } catch (reason) {
+      ticketResults.push({ status: 'rejected', reason });
+      await onSourceSettled?.({
+        ticketType,
+        status: 'failed',
+        rows: [],
+        revision: null,
+        errorCode: Number(reason?.status) || null,
+        errorMessage: String(reason?.message || 'granter_source_failed').slice(0, 500),
+      });
     }
-    return { ticketType, rows, revision };
-  }, 1);
+  }
   const ticketAuthorizationFailure = ticketResults.find(result =>
     result.status === 'rejected' && [401, 403].includes(Number(result.reason?.status)),
   );
@@ -433,7 +434,7 @@ async function buildAnalytics({ from, to, scope }) {
       return;
     }
     revision ||= result.value.revision;
-    const normalized = result.value.rows.map(row => normalizeGranterFinanceTicket(row, ticketType, assetsById, contactsById)).filter(Boolean);
+    const normalized = result.value.rows;
     allRows.push(...normalized);
     sourceStatus.push({ ticketType, label: GRANTER_TICKET_LABELS[ticketType], status: 'loaded', count: normalized.length });
   });
@@ -504,6 +505,7 @@ export default async function handler(req, res) {
   if (req.method !== 'GET') return methodNotAllowed(res);
   const { organizationId, from, to } = req.query || {};
   const scope = req.query?.scope === 'all' ? 'all' : 'period';
+  const forceRefresh = req.query?.refresh === '1';
   if (!DATE_PATTERN.test(from || '') || !DATE_PATTERN.test(to || '') || from > to) return res.status(400).json({ ok: false, error: '조회 기간을 확인해 주세요.' });
   const effectiveTo = scope === 'all' ? todayInSeoul() : to;
   const auth = await authorizeFinance(req, organizationId, { permissionsAny: ['finance.view', 'expense.manage', 'expense.card.manage'] });
@@ -512,10 +514,24 @@ export default async function handler(req, res) {
 
   const cacheKey = `${organizationId}:${scope}:${from}:${effectiveTo}`;
   const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.createdAt < CACHE_TTL_MS) return res.status(200).json({ ...cached.payload, cached: true });
+  if (!forceRefresh && cached && Date.now() - cached.createdAt < CACHE_TTL_MS) return res.status(200).json({ ...cached.payload, cached: true });
+  if (!forceRefresh) {
+    const persisted = await loadLatestGranterAnalytics({ organizationId, scope, from, to: effectiveTo }).catch(() => null);
+    if (persisted) {
+      cache.set(cacheKey, { createdAt: Date.now(), payload: persisted });
+      return res.status(200).json(persisted);
+    }
+  }
+  if (scope === 'all') {
+    const activeSyncRun = await loadActiveGranterSyncRun({ organizationId, scope, to: effectiveTo }).catch(() => null);
+    return res.status(200).json({ ok: true, configured: true, syncRequired: true, activeSyncRun, scope, range: { from, to: effectiveTo } });
+  }
   try {
     const payload = await buildAnalytics({ from, to: effectiveTo, scope });
     if (granterPayloadCacheable(payload)) cache.set(cacheKey, { createdAt: Date.now(), payload });
+    await persistInlineGranterAnalytics({ organizationId, userId: auth.user.id, scope, from, to: effectiveTo, payload }).catch(error => {
+      console.warn('Granter inline snapshot persistence failed', { message: error?.message, status: error?.status });
+    });
     if (cache.size > 20) cache.delete(cache.keys().next().value);
     return res.status(200).json(payload);
   } catch (error) {

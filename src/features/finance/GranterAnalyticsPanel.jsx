@@ -1,5 +1,5 @@
 import React, { useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { loadGranterFinanceAnalytics } from './granterAnalyticsClient';
+import { loadGranterFinanceAnalytics, loadGranterFinanceSyncRun, startGranterFinanceSync } from './granterAnalyticsClient';
 import { filterGranterRows, formatBusinessNumber, granterMetric, summarizeFilteredGranterRows } from './granterAnalyticsModel';
 
 const won = value => `${Number(value || 0).toLocaleString('ko-KR')}원`;
@@ -78,23 +78,45 @@ export default function GranterAnalyticsPanel({ organizationId, from, to }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [syncRun, setSyncRun] = useState(null);
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [filters, setFilters] = useState({ category: '', tag: '', asset: '', contact: '', businessNumber: '', ticketType: '', direction: '', included: 'included' });
   const [page, setPage] = useState(1);
   const pageSize = 100;
 
-  const refresh = async () => {
+  const refresh = async (force = false) => {
     setLoading(true); setError('');
     try {
-      const result = await loadGranterFinanceAnalytics({ organizationId, from, to, scope });
+      const result = await loadGranterFinanceAnalytics({ organizationId, from, to, scope, refresh: force });
       if (!result.configured) throw new Error(result.error || 'Granter 연결 정보가 없습니다.');
+      if (result.syncRequired) {
+        const run = result.activeSyncRun || await startGranterFinanceSync({ organizationId, from, to, scope });
+        setSyncRun(run);
+        return;
+      }
       setData(result);
     } catch (nextError) {
       setError(nextError.message || 'Granter 장부를 불러오지 못했습니다.');
     } finally { setLoading(false); }
   };
-  useEffect(() => { if (organizationId) refresh(); }, [organizationId, from, to, scope]);
+  useEffect(() => { setSyncRun(null); if (organizationId) refresh(false); }, [organizationId, from, to, scope]);
+  useEffect(() => {
+    if (!syncRun?.id || !['queued', 'running'].includes(syncRun.status)) return undefined;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const run = await loadGranterFinanceSyncRun({ organizationId, runId: syncRun.id });
+        if (cancelled) return;
+        setSyncRun(run);
+        if (['succeeded', 'partial'].includes(run.status)) await refresh(false);
+        else if (run.status === 'failed') setError(run.error_message || '전체 기간 동기화를 완료하지 못했습니다.');
+      } catch (nextError) {
+        if (!cancelled) setError(nextError.message || '동기화 상태를 확인하지 못했습니다.');
+      }
+    }, 2000);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [organizationId, syncRun?.id, syncRun?.status, syncRun?.completed_sources, syncRun?.failed_sources]);
 
   const rows = data?.transactions || [];
   const filteredRows = useMemo(() => filterGranterRows(rows, { ...filters, query: deferredQuery }), [rows, filters, deferredQuery]);
@@ -108,11 +130,12 @@ export default function GranterAnalyticsPanel({ organizationId, from, to }) {
   const resetFilters = () => { setFilters({ category: '', tag: '', asset: '', contact: '', businessNumber: '', ticketType: '', direction: '', included: 'included' }); setQuery(''); };
 
   return <section className="granter-analytics" aria-busy={loading}>
-    <header className="granter-analytics-header"><div><span>GRANTER LIVE BOOK</span><h3>그랜터 전체 장부 분석</h3><p>계정과목·태그·자산·거래처·세금계산서·사업자번호를 한 번에 조회합니다.</p></div><div className="granter-analytics-actions"><div className="granter-scope-switch" role="group" aria-label="Granter 조회 범위"><button type="button" className={scope === 'all' ? 'active' : ''} onClick={() => setScope('all')}>전체 기간</button><button type="button" className={scope === 'period' ? 'active' : ''} onClick={() => setScope('period')}>선택 월</button></div><button className="outline" type="button" onClick={refresh} disabled={loading}>↻ 다시 불러오기</button></div></header>
+    <header className="granter-analytics-header"><div><span>GRANTER LIVE BOOK</span><h3>그랜터 전체 장부 분석</h3><p>계정과목·태그·자산·거래처·세금계산서·사업자번호를 한 번에 조회합니다.</p></div><div className="granter-analytics-actions"><div className="granter-scope-switch" role="group" aria-label="Granter 조회 범위"><button type="button" className={scope === 'all' ? 'active' : ''} onClick={() => setScope('all')}>전체 기간</button><button type="button" className={scope === 'period' ? 'active' : ''} onClick={() => setScope('period')}>선택 월</button></div><button className="outline" type="button" onClick={() => refresh(true)} disabled={loading || ['queued', 'running'].includes(syncRun?.status)}>↻ 다시 불러오기</button></div></header>
     {loading && <div className="granter-loading"><i/><div><b>{scope === 'all' ? '전체 장부를 안전하게 나눠 불러오는 중입니다' : '선택 월 장부를 불러오는 중입니다'}</b><span>거래 유형별로 수집하고 그래프를 계산하고 있어요.</span></div></div>}
-    {error && <div className="finance-hub-warning" role="alert">{error}<button onClick={refresh}>다시 시도</button></div>}
+    {syncRun && ['queued', 'running'].includes(syncRun.status) && <div className="granter-sync-progress" role="status"><div><span>전체 기간 동기화</span><b>{Number(syncRun.completed_sources || 0) + Number(syncRun.failed_sources || 0)}/{syncRun.total_sources || 12}개 원천 처리</b></div><i><em style={{ width: `${Math.min(100, (Number(syncRun.completed_sources || 0) + Number(syncRun.failed_sources || 0)) / Math.max(1, Number(syncRun.total_sources || 12)) * 100)}%` }}/></i><p>화면을 이동해도 서버에서 계속 수집하며, 다시 돌아오면 진행 상태를 복원합니다.</p></div>}
+    {error && <div className="finance-hub-warning" role="alert">{error}<button type="button" onClick={() => refresh(true)}>다시 시도</button></div>}
     {!loading && data && <>
-      <div className="granter-connection-line"><span className="connected">● 연결됨</span><b>{data.workspace?.name}</b><span>{data.range?.from} ~ {data.range?.to}</span><span>API {data.apiRevision || '리비전 미확인'}</span><span>계정과목 {data.references?.accountingCategoryCount || 0}개</span><span>태그 {data.references?.tags?.length || 0}개</span><span>자산 {data.references?.assets?.length || 0}개</span><span>거래처 {data.references?.contactCount || 0}개</span></div>
+      <div className="granter-connection-line"><span className="connected">● 연결됨</span><b>{data.workspace?.name}</b><span>{data.range?.from} ~ {data.range?.to}</span><span>API {data.apiRevision || '리비전 미확인'}</span>{data.persisted ? <span>저장본 · {data.syncRun?.finishedAt ? new Date(data.syncRun.finishedAt).toLocaleString('ko-KR') : '완료'}</span> : null}<span>계정과목 {data.references?.accountingCategoryCount || 0}개</span><span>태그 {data.references?.tags?.length || 0}개</span><span>자산 {data.references?.assets?.length || 0}개</span><span>거래처 {data.references?.contactCount || 0}개</span></div>
       {data.warnings?.length ? <div className="granter-partial-warning">{data.partial ? `${data.sourceStatus?.filter(item => item.status === 'loaded').length || 0}/${data.sourceStatus?.length || 0}개 원천을 먼저 표시합니다. 일시 제한 원천은 다시 불러오기로 재시도할 수 있습니다.` : `일부 미연동·권한 제한 원천 ${data.warnings.length}개는 제외했습니다. 연결된 원천 데이터는 모두 표시합니다.`}</div> : null}
       <nav className="granter-subtabs" aria-label="Granter 장부 보기">{[['analytics','분류·그래프'],['transactions','전체 거래'],['tax','세금계산서'],['business','사업자번호']].map(([id, label]) => <button key={id} type="button" className={view === id ? 'active' : ''} onClick={() => setView(id)}>{label}{id === 'tax' ? <em>{data.taxInvoices?.length || 0}</em> : null}</button>)}</nav>
 
