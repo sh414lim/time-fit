@@ -5,6 +5,7 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const TRANSACTION_LIMIT = 4000;
 const FALLBACK_HISTORY_START = '2018-01-01';
+const REQUEST_GAP_MS = 350;
 // Granter allows up to 366 calendar days per request. Using the full window
 // keeps all-source collection fast while the requests themselves stay serial.
 const WINDOW_DAYS = 365;
@@ -269,6 +270,16 @@ async function pooled(items, worker, concurrency = 3) {
   return results;
 }
 
+export async function settleGranterRequests(tasks, { gapMs = REQUEST_GAP_MS, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+  const results = [];
+  for (let index = 0; index < tasks.length; index += 1) {
+    try { results.push({ status: 'fulfilled', value: await tasks[index]() }); }
+    catch (reason) { results.push({ status: 'rejected', reason }); }
+    if (gapMs > 0 && index < tasks.length - 1) await wait(gapMs);
+  }
+  return results;
+}
+
 async function granterRequestWithRetry(path, options, attempts = 4) {
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -285,10 +296,10 @@ async function granterRequestWithRetry(path, options, attempts = 4) {
 }
 
 async function loadAssets() {
-  const settled = await pooled(ASSET_TYPES, async assetType => {
-    const result = await granterRequest('/api/public-docs/assets', { method: 'POST', body: { assetType } });
+  const settled = await settleGranterRequests(ASSET_TYPES.map(assetType => async () => {
+    const result = await granterRequestWithRetry('/api/public-docs/assets', { method: 'POST', body: { assetType } });
     return { assetType, rows: arrayPayload(result.payload), revision: result.revision };
-  }, 3);
+  }));
   const rows = [];
   const warnings = [];
   let revision = null;
@@ -312,14 +323,17 @@ function earliestAvailableDate({ workspace, assets }) {
 }
 
 async function buildAnalytics({ from, to, scope }) {
-  const [workspaceResult, subscriptionResult, categoriesResult, tagsResult, contactsResult, assetResult] = await Promise.allSettled([
-    granterRequest('/api/public-docs/workspace-profile'),
-    granterRequest('/api/public-docs/subscription'),
-    granterRequest('/api/public-docs/categories'),
-    granterRequest('/api/public-docs/ticket-tags'),
-    granterRequest('/api/public-docs/contacts'),
-    loadAssets(),
+  const [workspaceResult, subscriptionResult, categoriesResult, tagsResult, contactsResult, assetResult] = await settleGranterRequests([
+    () => granterRequestWithRetry('/api/public-docs/workspace-profile'),
+    () => granterRequestWithRetry('/api/public-docs/subscription'),
+    () => granterRequestWithRetry('/api/public-docs/categories'),
+    () => granterRequestWithRetry('/api/public-docs/ticket-tags'),
+    () => granterRequestWithRetry('/api/public-docs/contacts'),
+    () => loadAssets(),
   ]);
+  const authorizationFailure = [workspaceResult, subscriptionResult, categoriesResult, tagsResult, contactsResult]
+    .find(result => result.status === 'rejected' && [401, 403].includes(Number(result.reason?.status)));
+  if (authorizationFailure) throw authorizationFailure.reason;
   const warnings = [];
   const value = (result, key, fallback) => {
     if (result.status === 'fulfilled') return result.value.payload;
@@ -351,6 +365,7 @@ async function buildAnalytics({ from, to, scope }) {
     }
     return { ticketType, rows, revision };
   }, 1);
+  if (ticketResults.length && ticketResults.every(result => result.status === 'rejected')) throw ticketResults[0].reason;
   const allRows = [];
   const sourceStatus = [];
   let revision = assetBundle.revision

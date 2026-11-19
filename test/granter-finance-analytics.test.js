@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   groupGranterFinanceRows,
   normalizeGranterFinanceTicket,
+  settleGranterRequests,
   summarizeGranterFinanceRows,
   todayInSeoul,
 } from '../server/api/granter-finance-analytics.js';
@@ -75,4 +76,22 @@ test('client filters search business numbers and summarize the visible rows', ()
 
 test('all-period analytics ends on the current Seoul business date', () => {
   assert.equal(todayInSeoul(new Date('2026-11-18T16:30:00.000Z')), '2026-11-19');
+});
+
+test('Granter reference requests run serially to avoid authentication rate limits', async () => {
+  const order = [];
+  let active = 0;
+  let maxActive = 0;
+  const tasks = ['workspace', 'categories', 'assets'].map(name => async () => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    order.push(name);
+    await Promise.resolve();
+    active -= 1;
+    return name;
+  });
+  const results = await settleGranterRequests(tasks, { gapMs: 0 });
+  assert.equal(maxActive, 1);
+  assert.deepEqual(order, ['workspace', 'categories', 'assets']);
+  assert.deepEqual(results.map(result => result.status), ['fulfilled', 'fulfilled', 'fulfilled']);
 });

@@ -73,7 +73,7 @@ function BusinessDirectory({ contacts = [], groups = [] }) {
 }
 
 export default function GranterAnalyticsPanel({ organizationId, from, to }) {
-  const [scope, setScope] = useState('all');
+  const [scope, setScope] = useState('period');
   const [view, setView] = useState('analytics');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
