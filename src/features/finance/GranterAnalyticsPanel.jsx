@@ -113,7 +113,7 @@ export default function GranterAnalyticsPanel({ organizationId, from, to }) {
     {error && <div className="finance-hub-warning" role="alert">{error}<button onClick={refresh}>다시 시도</button></div>}
     {!loading && data && <>
       <div className="granter-connection-line"><span className="connected">● 연결됨</span><b>{data.workspace?.name}</b><span>{data.range?.from} ~ {data.range?.to}</span><span>API {data.apiRevision || '리비전 미확인'}</span><span>계정과목 {data.references?.accountingCategoryCount || 0}개</span><span>태그 {data.references?.tags?.length || 0}개</span><span>자산 {data.references?.assets?.length || 0}개</span><span>거래처 {data.references?.contactCount || 0}개</span></div>
-      {data.warnings?.length ? <div className="granter-partial-warning">일부 미연동·권한 제한 원천 {data.warnings.length}개는 제외했습니다. 연결된 원천 데이터는 모두 표시합니다.</div> : null}
+      {data.warnings?.length ? <div className="granter-partial-warning">{data.partial ? `${data.sourceStatus?.filter(item => item.status === 'loaded').length || 0}/${data.sourceStatus?.length || 0}개 원천을 먼저 표시합니다. 일시 제한 원천은 다시 불러오기로 재시도할 수 있습니다.` : `일부 미연동·권한 제한 원천 ${data.warnings.length}개는 제외했습니다. 연결된 원천 데이터는 모두 표시합니다.`}</div> : null}
       <nav className="granter-subtabs" aria-label="Granter 장부 보기">{[['analytics','분류·그래프'],['transactions','전체 거래'],['tax','세금계산서'],['business','사업자번호']].map(([id, label]) => <button key={id} type="button" className={view === id ? 'active' : ''} onClick={() => setView(id)}>{label}{id === 'tax' ? <em>{data.taxInvoices?.length || 0}</em> : null}</button>)}</nav>
 
       {view === 'analytics' && <>

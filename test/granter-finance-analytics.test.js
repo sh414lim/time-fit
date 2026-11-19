@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   groupGranterFinanceRows,
+  granterAttemptsForScope,
+  granterBudgetForScope,
+  granterPayloadCacheable,
   normalizeGranterFinanceTicket,
   settleGranterRequests,
   summarizeGranterFinanceRows,
@@ -94,4 +97,14 @@ test('Granter reference requests run serially to avoid authentication rate limit
   assert.equal(maxActive, 1);
   assert.deepEqual(order, ['workspace', 'categories', 'assets']);
   assert.deepEqual(results.map(result => result.status), ['fulfilled', 'fulfilled', 'fulfilled']);
+});
+
+test('current-month requests avoid retry storms and transient partial responses are not cached', () => {
+  assert.equal(granterAttemptsForScope('period'), 1);
+  assert.equal(granterAttemptsForScope('all'), 2);
+  assert.deepEqual(granterBudgetForScope('period'), { budgetMs: 26000, timeoutMs: 8000 });
+  assert.deepEqual(granterBudgetForScope('all'), { budgetMs: 110000, timeoutMs: 30000 });
+  assert.equal(granterPayloadCacheable({ sourceStatus: [{ status: 'loaded', statusCode: null }] }), true);
+  assert.equal(granterPayloadCacheable({ sourceStatus: [{ status: 'failed', statusCode: 429 }] }), false);
+  assert.equal(granterPayloadCacheable({ sourceStatus: [{ status: 'failed', statusCode: 503 }] }), false);
 });

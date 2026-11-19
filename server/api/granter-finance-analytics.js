@@ -6,6 +6,8 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 const TRANSACTION_LIMIT = 4000;
 const FALLBACK_HISTORY_START = '2018-01-01';
 const REQUEST_GAP_MS = 350;
+const PERIOD_REQUEST_TIMEOUT_MS = 8000;
+const PERIOD_BUDGET_MS = 26000;
 // Granter allows up to 366 calendar days per request. Using the full window
 // keeps all-source collection fast while the requests themselves stay serial.
 const WINDOW_DAYS = 365;
@@ -280,11 +282,23 @@ export async function settleGranterRequests(tasks, { gapMs = REQUEST_GAP_MS, wai
   return results;
 }
 
-async function granterRequestWithRetry(path, options, attempts = 4) {
+function deadlineExceeded() {
+  const error = new Error('granter_progressive_sync_deadline_exceeded');
+  error.name = 'TimeoutError';
+  error.status = 504;
+  return error;
+}
+
+async function granterRequestWithRetry(path, options, attempts = 4, { deadlineAt = Number.POSITIVE_INFINITY, timeoutMs = 30000 } = {}) {
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await granterRequest(path, options);
+      const remainingMs = deadlineAt - Date.now();
+      if (remainingMs <= 0) throw deadlineExceeded();
+      return await granterRequest(path, {
+        ...(options || {}),
+        timeoutMs: Math.min(timeoutMs, remainingMs),
+      });
     } catch (error) {
       lastError = error;
       const retryable = error?.status === 429 || Number(error?.status) >= 500 || error?.name === 'TimeoutError' || error?.name === 'AbortError';
@@ -295,9 +309,25 @@ async function granterRequestWithRetry(path, options, attempts = 4) {
   throw lastError;
 }
 
-async function loadAssets() {
+export function granterAttemptsForScope(scope) {
+  return scope === 'period' ? 1 : 2;
+}
+
+export function granterBudgetForScope(scope) {
+  return scope === 'period'
+    ? { budgetMs: PERIOD_BUDGET_MS, timeoutMs: PERIOD_REQUEST_TIMEOUT_MS }
+    : { budgetMs: 110000, timeoutMs: 30000 };
+}
+
+export function granterPayloadCacheable(payload) {
+  return !(payload?.sourceStatus || []).some(item =>
+    item.status === 'failed' && (item.statusCode === 429 || Number(item.statusCode) >= 500),
+  );
+}
+
+async function loadAssets(attempts, requestPolicy) {
   const settled = await settleGranterRequests(ASSET_TYPES.map(assetType => async () => {
-    const result = await granterRequestWithRetry('/api/public-docs/assets', { method: 'POST', body: { assetType } });
+    const result = await granterRequestWithRetry('/api/public-docs/assets', { method: 'POST', body: { assetType } }, attempts, requestPolicy);
     return { assetType, rows: arrayPayload(result.payload), revision: result.revision };
   }));
   const rows = [];
@@ -323,13 +353,16 @@ function earliestAvailableDate({ workspace, assets }) {
 }
 
 async function buildAnalytics({ from, to, scope }) {
+  const attempts = granterAttemptsForScope(scope);
+  const budget = granterBudgetForScope(scope);
+  const requestPolicy = { deadlineAt: Date.now() + budget.budgetMs, timeoutMs: budget.timeoutMs };
   const [workspaceResult, subscriptionResult, categoriesResult, tagsResult, contactsResult, assetResult] = await settleGranterRequests([
-    () => granterRequestWithRetry('/api/public-docs/workspace-profile'),
-    () => granterRequestWithRetry('/api/public-docs/subscription'),
-    () => granterRequestWithRetry('/api/public-docs/categories'),
-    () => granterRequestWithRetry('/api/public-docs/ticket-tags'),
-    () => granterRequestWithRetry('/api/public-docs/contacts'),
-    () => loadAssets(),
+    () => granterRequestWithRetry('/api/public-docs/workspace-profile', undefined, attempts, requestPolicy),
+    () => granterRequestWithRetry('/api/public-docs/subscription', undefined, attempts, requestPolicy),
+    () => granterRequestWithRetry('/api/public-docs/categories', undefined, attempts, requestPolicy),
+    () => granterRequestWithRetry('/api/public-docs/ticket-tags', undefined, attempts, requestPolicy),
+    () => granterRequestWithRetry('/api/public-docs/contacts', undefined, attempts, requestPolicy),
+    () => loadAssets(attempts, requestPolicy),
   ]);
   const authorizationFailure = [workspaceResult, subscriptionResult, categoriesResult, tagsResult, contactsResult]
     .find(result => result.status === 'rejected' && [401, 403].includes(Number(result.reason?.status)));
@@ -358,14 +391,17 @@ async function buildAnalytics({ from, to, scope }) {
     const rows = [];
     let revision = null;
     for (const window of windows) {
-      const result = await granterRequestWithRetry('/api/public-docs/tickets', { method: 'POST', body: { ticketType, ...window } });
+      const result = await granterRequestWithRetry('/api/public-docs/tickets', { method: 'POST', body: { ticketType, ...window } }, attempts, requestPolicy);
       revision ||= result.revision;
       rows.push(...arrayPayload(result.payload));
       await new Promise(resolve => setTimeout(resolve, 250));
     }
     return { ticketType, rows, revision };
   }, 1);
-  if (ticketResults.length && ticketResults.every(result => result.status === 'rejected')) throw ticketResults[0].reason;
+  const ticketAuthorizationFailure = ticketResults.find(result =>
+    result.status === 'rejected' && [401, 403].includes(Number(result.reason?.status)),
+  );
+  if (ticketAuthorizationFailure) throw ticketAuthorizationFailure.reason;
   const allRows = [];
   const sourceStatus = [];
   let revision = assetBundle.revision
@@ -388,6 +424,8 @@ async function buildAnalytics({ from, to, scope }) {
             ? '연동 자산 확인'
             : statusCode === 429
               ? '요청 제한 · 다시 시도'
+              : statusCode === 504
+                ? '응답 지연 · 다시 시도'
               : result.reason?.message === 'granter_response_too_large'
                 ? '조회량 분할 필요'
                 : '연동 확인',
@@ -451,6 +489,10 @@ async function buildAnalytics({ from, to, scope }) {
       assetTypes: [...assetTypes.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
     },
     sourceStatus,
+    partial: warnings.length > 0 || sourceStatus.some(item => item.status === 'failed'),
+    retryableSourceTypes: sourceStatus
+      .filter(item => item.status === 'failed' && (item.statusCode === 429 || Number(item.statusCode) >= 500))
+      .map(item => item.ticketType),
     transactions: selectedRows.slice(0, TRANSACTION_LIMIT),
     transactionsTruncated: selectedRows.length > TRANSACTION_LIMIT,
     taxInvoices: selectedRows.filter(row => row.ticketType === 'TAX_INVOICE_TICKET'),
@@ -473,7 +515,7 @@ export default async function handler(req, res) {
   if (cached && Date.now() - cached.createdAt < CACHE_TTL_MS) return res.status(200).json({ ...cached.payload, cached: true });
   try {
     const payload = await buildAnalytics({ from, to: effectiveTo, scope });
-    cache.set(cacheKey, { createdAt: Date.now(), payload });
+    if (granterPayloadCacheable(payload)) cache.set(cacheKey, { createdAt: Date.now(), payload });
     if (cache.size > 20) cache.delete(cache.keys().next().value);
     return res.status(200).json(payload);
   } catch (error) {

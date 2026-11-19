@@ -122,7 +122,7 @@ async function readPayload(response) {
   try { return JSON.parse(text); } catch { throw new Error('granter_response_invalid'); }
 }
 
-export async function granterRequest(path, { method = 'GET', body, idempotencyKey, fetchImpl = fetch } = {}) {
+export async function granterRequest(path, { method = 'GET', body, idempotencyKey, fetchImpl = fetch, timeoutMs = 30000 } = {}) {
   const apiKey = granterApiKey({ path, method });
   if (!apiKey) throw new Error('granter_api_key_missing');
   const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
@@ -134,7 +134,7 @@ export async function granterRequest(path, { method = 'GET', body, idempotencyKe
       ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
     },
     body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(Math.max(1, Math.min(Number(timeoutMs) || 30000, 30000))),
   });
   const payload = await readPayload(response);
   if (!response.ok) {
