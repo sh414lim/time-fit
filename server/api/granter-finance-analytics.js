@@ -521,6 +521,8 @@ export default async function handler(req, res) {
       cache.set(cacheKey, { createdAt: Date.now(), payload: persisted });
       return res.status(200).json(persisted);
     }
+    const activeSyncRun = await loadActiveGranterSyncRun({ organizationId, scope, to: effectiveTo }).catch(() => null);
+    return res.status(200).json({ ok: true, configured: true, syncRequired: true, activeSyncRun, scope, range: { from, to: effectiveTo } });
   }
   if (scope === 'all') {
     const activeSyncRun = await loadActiveGranterSyncRun({ organizationId, scope, to: effectiveTo }).catch(() => null);

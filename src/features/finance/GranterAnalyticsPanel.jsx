@@ -91,8 +91,9 @@ export default function GranterAnalyticsPanel({ organizationId, from, to }) {
       const result = await loadGranterFinanceAnalytics({ organizationId, from, to, scope, refresh: force });
       if (!result.configured) throw new Error(result.error || 'Granter 연결 정보가 없습니다.');
       if (result.syncRequired) {
-        const run = result.activeSyncRun || await startGranterFinanceSync({ organizationId, from, to, scope });
-        setSyncRun(run);
+        if (result.activeSyncRun) setSyncRun(result.activeSyncRun);
+        else if (force) setSyncRun(await startGranterFinanceSync({ organizationId, from, to, scope }));
+        else setError('저장된 장부가 아직 없습니다. 다시 불러오기를 누르면 백그라운드 동기화를 시작합니다.');
         return;
       }
       setData(result);

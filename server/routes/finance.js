@@ -8,6 +8,8 @@ import financeReport from '../api/finance-report.js';
 import financeHub from '../api/finance-hub.js';
 import granterFinanceAnalytics from '../api/granter-finance-analytics.js';
 import granterFinanceSync from '../api/granter-finance-sync.js';
+import granterProfitSyncWorker from '../api/granter-profit-sync-worker.js';
+import profitOverview from '../api/profit-overview.js';
 import receiptProcess from '../api/receipt-process.js';
 import receiptAx from '../api/receipt-ax.js';
 
@@ -22,6 +24,8 @@ export const financeRoutes = Object.freeze({
   'finance-hub': financeHub,
   'granter-finance-analytics': granterFinanceAnalytics,
   'granter-finance-sync': granterFinanceSync,
+  'granter-profit-sync-worker': granterProfitSyncWorker,
+  'profit-overview': profitOverview,
   'receipt-process': receiptProcess,
   'receipt-ax': receiptAx,
 });

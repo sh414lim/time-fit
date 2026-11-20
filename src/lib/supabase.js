@@ -594,6 +594,10 @@ export async function loadExpenseLedger(organizationId, filters = {}) {
 export async function loadFinanceHub({ organizationId, from, to }) {
   return cardConnectionRequest('finance-hub', { query: { organizationId, from, to } });
 }
+export async function loadProfitOverview({ organizationId, from, to, refresh = false }) {
+  const payload = await cardConnectionRequest('profit-overview', { query: { organizationId, from, to, ...(refresh ? { refresh: 1 } : {}) } });
+  return payload.overview;
+}
 export async function loadExpenseDetail(organizationId, expenseId) {
   return cardConnectionRequest('expense-detail', { query: { organizationId, expenseId } });
 }

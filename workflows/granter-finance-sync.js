@@ -1,5 +1,7 @@
 import { buildAnalytics, GRANTER_FINANCE_TICKET_TYPES } from '../server/api/granter-finance-analytics.js';
 import { financeRest } from '../server/api/_finance-server.js';
+import { persistGranterFinanceFacts } from '../server/api/_profit-store.js';
+import { rebuildProfitSnapshot } from '../server/api/_profit-overview.js';
 import { sleep } from 'workflow';
 
 const encode = value => encodeURIComponent(String(value));
@@ -52,6 +54,17 @@ async function executeGranterFinanceSync(input) {
             updated_at: now,
           }]),
         });
+        if (!failed) {
+          await persistGranterFinanceFacts({
+            organizationId: input.organizationId,
+            runId: input.runId,
+            revision: source.revision,
+            sourceType: source.ticketType,
+            rows: source.rows,
+            rangeFrom: input.from,
+            rangeTo: input.to,
+          });
+        }
         await financeRest(`timefit_user_granter_sync_runs?id=eq.${encode(input.runId)}`, {
           method: 'PATCH',
           headers: { Prefer: 'return=minimal' },
@@ -84,10 +97,13 @@ async function executeGranterFinanceSync(input) {
         failed_sources: bestPayload.sourceStatus?.filter(item => item.status === 'failed').length || 0,
         source_status: bestPayload.sourceStatus || statuses,
         result_payload: bestPayload,
-        finished_at: finishedAt,
+        finished_at: storedStatus === 'running' ? null : finishedAt,
         updated_at: finishedAt,
       }),
     });
+    if (storedStatus !== 'running') {
+      await rebuildProfitSnapshot({ organizationId: input.organizationId, from: input.from, to: input.to });
+    }
     console.info('Granter sync step finished', { runId: input.runId, status, attempt: input.attempt });
     return { runId: input.runId, status };
   } catch (error) {

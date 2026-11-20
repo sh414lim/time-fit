@@ -311,6 +311,47 @@
 .expense-match-candidate .outline, .expense-match-candidate .submit { min-height: 38px; padding: 0 12px; }
 
 .finance-report-dashboard { margin-bottom: 16px; }
+.profit-overview { margin-bottom: 18px; padding: 24px; border: 1px solid #e5eaf1; border-radius: 24px; background: #fff; box-shadow: 0 12px 32px rgba(15, 23, 42, .05); }
+.profit-overview > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.profit-overview > header span { color: #3182f6; font-size: 12px; font-weight: 800; letter-spacing: .08em; }
+.profit-overview > header h3 { margin: 5px 0 7px; font-size: 25px; }
+.profit-overview > header p { margin: 0; color: #6b7684; }
+.profit-overview-state { display: flex; align-items: center; gap: 10px; }
+.profit-overview-state > b { padding: 8px 11px; border-radius: 999px; font-size: 13px; white-space: nowrap; }
+.profit-overview-state > b.actual { color: #087f5b; background: #e9fbf4; }
+.profit-overview-state > b.provisional { color: #9a5b00; background: #fff6dc; }
+.profit-overview-state > b.incomplete { color: #b42318; background: #fff0ef; }
+.profit-overview-loading, .profit-overview-empty { padding: 42px 16px; text-align: center; color: #8b95a1; }
+.profit-overview-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 22px 0 14px; }
+.profit-overview-kpis article { min-width: 0; padding: 17px; border-radius: 18px; background: #f7f9fc; }
+.profit-overview-kpis span, .profit-overview-kpis small { display: block; color: #8b95a1; font-size: 13px; }
+.profit-overview-kpis b { display: block; overflow: hidden; margin: 8px 0 5px; color: #191f28; font-size: 20px; text-overflow: ellipsis; }
+.profit-overview-kpis .positive { background: #eef7ff; }
+.profit-overview-kpis .positive b { color: #1769d2; }
+.profit-overview-kpis .negative { background: #fff1f0; }
+.profit-overview-kpis .negative b { color: #d92d20; }
+.profit-overview-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, .85fr); gap: 12px; }
+.profit-overview-box { min-width: 0; padding: 18px; border: 1px solid #edf0f4; border-radius: 18px; }
+.profit-overview-box-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.profit-overview-box-head h4 { margin: 0 0 4px; font-size: 16px; }
+.profit-overview-box-head p { margin: 0; color: #8b95a1; font-size: 12px; }
+.profit-overview-box-head > div:last-child { display: flex; gap: 11px; color: #6b7684; font-size: 12px; }
+.profit-overview-box-head > div:last-child span::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; background: #3182f6; }
+.profit-overview-box-head > div:last-child .profit::before { background: #16a078; }
+.profit-overview-chart { width: 100%; height: 190px; margin-top: 12px; overflow: visible; }
+.profit-overview-chart line { stroke: #edf0f4; stroke-width: 1; }
+.profit-overview-chart polyline { fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-width: 3; }
+.profit-overview-chart polyline.sales { stroke: #3182f6; }
+.profit-overview-chart polyline.profit { stroke: #16a078; }
+.profit-overview-chart text { fill: #8b95a1; font-size: 10px; text-anchor: middle; }
+.profit-overview-bridge { display: grid; gap: 8px; margin-top: 16px; }
+.profit-overview-bridge > div { display: flex; justify-content: space-between; padding: 11px 12px; border-radius: 12px; background: #f7f9fc; }
+.profit-overview-bridge .cost b { color: #d92d20; }
+.profit-overview-bridge .profit { color: #1769d2; background: #eef7ff; }
+.profit-overview > footer { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 13px; color: #8b95a1; font-size: 12px; }
+.profit-overview > footer em { color: #b54708; font-style: normal; }
+@media (max-width: 1000px) { .profit-overview-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .profit-overview-grid { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .profit-overview { padding: 18px; border-radius: 20px; } .profit-overview > header { display: grid; } .profit-overview-state { justify-content: space-between; } .profit-overview-kpis { grid-template-columns: 1fr 1fr; } .profit-overview-kpis article:last-child { grid-column: 1 / -1; } }
 .finance-report-dashboard .card-title .submit { min-height: 42px; padding: 0 16px; }
 .finance-report-actions { display: flex; align-items: center; gap: 7px; }
 .finance-report-actions .outline, .finance-report-actions .submit { min-height: 42px; padding: 0 13px; }
